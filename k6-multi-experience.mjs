@@ -4,7 +4,8 @@ import { Counter, Rate, Trend } from 'k6/metrics';
 import { sessionAllowed } from './contracts.mjs';
 
 const mapping = JSON.parse(open('./restaurant-items.json'));
-const restaurants = Object.keys(mapping);
+const pausedRestaurants = JSON.parse(open('./paused-restaurants.json'));
+const restaurants = Object.keys(mapping).filter(id => !pausedRestaurants.includes(id));
 const trackingExperiences = JSON.parse(open(__ENV.FIXTURE_FILE));
 const site = 'https://qr.gilgaamesh.com';
 const supabaseUrl = 'https://supabase.gilgaamesh.com';
@@ -34,6 +35,7 @@ const functionUnavailable = new Counter('function_unavailable');
 const functionTransportErrors = new Counter('function_transport_errors');
 
 export const options = {
+  userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   scenarios: { workload: { executor: 'ramping-vus', startVUs: 0, stages: [
     { duration: '15s', target: peak }, { duration: `${hold}s`, target: peak }, { duration: '10s', target: 0 },
   ], gracefulRampDown: '10s', gracefulStop: '10s' } },
@@ -78,6 +80,21 @@ function menuEvent(restaurant, item) {
   analyticsRateLimited.add(res.status === 429 ? 1 : 0);
   if (ok) analyticsAccepted.add(1);
   return ok;
+}
+export function setup() {
+  // Denial is expected for these fixtures and is verified separately from the
+  // successful visitor workload. Do not change restaurant access settings.
+  for (const restaurant of pausedRestaurants) {
+    const menu = http.get(`${site}/api/public-menu/${restaurant}`, {
+      timeout: '15s', responseCallback: http.expectedStatuses(404), tags: { name: 'paused-menu-denial' },
+    });
+    const event = http.post(site + '/api/analytics/events', JSON.stringify({ events: [{ id: uuid(), event_type: 'menu_open', restaurant_id: restaurant }] }), {
+      headers: { 'Content-Type': 'application/json', Origin: site }, timeout: '15s',
+      responseCallback: http.expectedStatuses(400), tags: { name: 'paused-analytics-denial' },
+    });
+    if (menu.status !== 404 || event.status !== 400 || body(event)?.error !== 'unavailable_event_target')
+      throw new Error('Paused fixture denial preflight failed');
+  }
 }
 export default function () {
   let ok = true;
@@ -128,6 +145,7 @@ export default function () {
 }
 export function handleSummary(data) {
   data.meta = { node_index: nodeIndex, run_id: __ENV.RUN_ID, configured_vus: peak,
+    active_restaurants: restaurants.length, paused_restaurants_checked: pausedRestaurants.length,
     duration_ms: data.state.testRunDurationMs, finished_at: new Date().toISOString() };
   return { [`summary-node-${nodeIndex}.json`]: JSON.stringify(data, null, 2) };
 }
