@@ -1,0 +1,45 @@
+export function sessionAllowed(status, body) {
+  return status === 200 && body?.status === 'allowed' &&
+    typeof body.session_token === 'string' && body.session_token.length > 0 &&
+    typeof body.session_id === 'string' && body.session_id.length > 0;
+}
+
+export function aggregateSummaries(summaries, expectedNodes = 10) {
+  if (summaries.length !== expectedNodes) throw new Error(`Expected ${expectedNodes} summaries; received ${summaries.length}`);
+  const indices = new Set();
+  const first = summaries[0]?.meta;
+  for (const data of summaries) {
+    const meta = data.meta;
+    if (!meta || !Number.isInteger(meta.node_index) || meta.node_index < 1 || meta.node_index > expectedNodes || indices.has(meta.node_index))
+      throw new Error('Missing or duplicate node identity');
+    indices.add(meta.node_index);
+    if (!meta.run_id || meta.run_id !== first.run_id || meta.configured_vus !== first.configured_vus ||
+      !(meta.duration_ms > 0) || !Number.isFinite(Date.parse(meta.finished_at))) throw new Error('Invalid or mixed run metadata');
+    for (const required of ['http_reqs', 'errors', 'journey_success', 'tracking_admission_success', 'game_admission_success', 'asset_success', 'analytics_delivery_success'])
+      if (!data.metrics?.[required]) throw new Error(`Missing required metric: ${required}`);
+  }
+  const count = name => summaries.reduce((n, d) => n + (d.metrics[name]?.values?.count ?? 0), 0);
+  const rate = name => {
+    const positive = summaries.reduce((n, d) => n + (d.metrics[name]?.values?.passes ?? 0), 0);
+    const negative = summaries.reduce((n, d) => n + (d.metrics[name]?.values?.fails ?? 0), 0);
+    return { positive, negative, samples: positive + negative, rate: positive + negative ? positive / (positive + negative) : null };
+  };
+  const nodes = summaries.map(d => ({ node: d.meta.node_index, passed: true, failed_thresholds: [] }));
+  summaries.forEach((d, i) => {
+    const thresholds = Object.entries(d.metrics).flatMap(([name, m]) => Object.entries(m.thresholds ?? {}).map(([expression, result]) => ({ name, expression, ok: result.ok })));
+    if (!thresholds.length) throw new Error('Summary contains no threshold results');
+    nodes[i].failed_thresholds = thresholds.filter(t => t.ok !== true).map(t => `${t.name}: ${t.expression}`);
+    nodes[i].passed = !nodes[i].failed_thresholds.length;
+  });
+  const end = Math.max(...summaries.map(d => Date.parse(d.meta.finished_at)));
+  const start = Math.min(...summaries.map(d => Date.parse(d.meta.finished_at) - d.meta.duration_ms));
+  const wallSeconds = (end - start) / 1000;
+  const latencies = Object.fromEntries(['menu_read_duration', 'tracking_session_duration', 'tracking_asset_duration', 'game_session_duration'].map(name => {
+    const values = summaries.map(d => d.metrics[name]?.values?.['p(95)']).filter(Number.isFinite);
+    return [name, { mean_node_p95_ms: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null, worst_node_p95_ms: values.length ? Math.max(...values) : null }];
+  }));
+  return { passed: nodes.every(n => n.passed), nodes, http_requests: count('http_reqs'), wall_seconds: wallSeconds,
+    average_requests_per_second: count('http_reqs') / wallSeconds, http_failures: rate('http_req_failed'), checked_errors: rate('errors'),
+    journeys: rate('journey_success'), menu_hits: rate('menu_edge_hit'), asset_hits: rate('asset_edge_hit'), latencies,
+    client_acknowledged_events: count('analytics_accepted') };
+}

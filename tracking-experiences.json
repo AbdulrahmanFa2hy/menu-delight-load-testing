@@ -2,91 +2,81 @@
   {
     "experience_id": "026a5b32-08c1-46cf-9456-e49a6bb343e3",
     "revision_id": "add77e49-78ab-44e2-88c0-ed843fd85046",
-    "source_id": "85d82eb1-45f7-4b7a-8b73-6c4b66c35ee7",
+    "source_id": "65747b0d-5116-4429-871c-cd76f6d421a5",
     "source_type": "restaurant",
     "restaurant_id": "0e72058e-b4c9-4c43-98a8-315b8f94cc15",
-    "token": "l7Vpw2AdCBAvqar_eJncW08vkAWDsaLChs6E0GwjwfQ",
     "has_3d": true
   },
   {
     "experience_id": "225c9c43-6b6f-4e56-9d8a-9c9a36df5a73",
     "revision_id": "60ff4118-30d8-43e3-a457-2f7bb8ab77cd",
-    "source_id": "5ae34a64-7495-4a9d-9eb3-8c7aedfa531d",
+    "source_id": "d5ec6fd6-3db1-4f13-ad51-dfcb0f8bb256",
     "source_type": "restaurant",
     "restaurant_id": "11111111-1111-4111-8111-111111111111",
-    "token": "B2eEmi14tvfpppkMLxy1dmC-uawz153G1IKnmqBsdRY",
     "has_3d": false
   },
   {
     "experience_id": "32a5836b-719e-4fb9-b378-8145fd8eee98",
     "revision_id": "b556cbda-7e55-40f8-a017-8141c77f6b88",
-    "source_id": "42af01b4-e5bf-4d04-881c-5e6ba0853d3d",
+    "source_id": "0b2e92cc-d56d-41fa-a95b-81fc7b1152aa",
     "source_type": "restaurant",
     "restaurant_id": "22222222-2222-4222-8222-222222222222",
-    "token": "3JMOM1SqnodUdhFG87fPqh63Tb3rndQ80V4M1SxuBV8",
     "has_3d": true
   },
   {
     "experience_id": "389cfeef-44e6-4d73-a348-7e07834bfc0a",
     "revision_id": "3f1386f2-7e40-4777-95e8-b71891cc63f6",
-    "source_id": "462e5dae-8e9d-433d-a9e9-1f3f629835e1",
+    "source_id": "088312bf-417a-48a4-9656-06ba0023878b",
     "source_type": "restaurant",
     "restaurant_id": "f0838f48-02b9-5390-9a96-6fd497568c6c",
-    "token": "rk-wKZ_JfutlKscpsK6mCKJpjCejnwYWCyUeExnllnQ",
     "has_3d": false
   },
   {
     "experience_id": "84fc3646-2640-48d7-8be6-e4d5d7858b32",
     "revision_id": "6e186227-28ec-4e5a-b617-03426aafcba1",
-    "source_id": "d0c501c4-d9d2-4c13-b42f-305824b019d6",
+    "source_id": "93ccaf7b-5fc7-4470-8234-f600f4ba29f1",
     "source_type": "restaurant",
     "restaurant_id": "28f400db-4e7c-59df-b27e-fbee64b6c1d7",
-    "token": "p2N7GhsX9burkmbtuWPZRF9ouCMusQYucX3etg3m7LQ",
     "has_3d": true
   },
   {
     "experience_id": "85c565d5-4c2d-48ca-9362-b41a34b5185c",
     "revision_id": "8678dbf7-e40d-4cbc-8b35-33029594aace",
-    "source_id": "55eccea0-d13a-41af-88c6-9d29a5f7b989",
+    "source_id": "d485e274-38cf-4df4-bcbc-65887312c8d9",
     "source_type": "standalone",
     "restaurant_id": null,
-    "token": "JYEUQQ7c704QevIbDlUx8UT-J_uZFCwQFTttN1-171g",
     "has_3d": false
   },
   {
     "experience_id": "18f52724-6289-4f15-9d95-58428f6b395d",
     "revision_id": "482e538d-472a-4fea-89e4-03a200b50a2f",
-    "source_id": "b8c44528-7ffd-4c0e-8ed8-c5925fe54f0f",
+    "source_id": "46d17b6d-4b58-469f-9738-5e055995ab55",
     "source_type": "standalone",
     "restaurant_id": null,
-    "token": "w-1cVPBGgv5RXVAtf_F2Pu6JtgNQnDoPaynqvdiBiUc",
     "has_3d": true
   },
   {
     "experience_id": "d899a66e-7552-4324-819c-2c9dd4be3c88",
     "revision_id": "ccc8e450-c48b-48c7-b79a-7e82031f742c",
-    "source_id": "a4e55a81-f8e9-4771-a08b-3b12a949583a",
+    "source_id": "fa13f20f-05fd-4165-8684-7a1179d13126",
     "source_type": "standalone",
     "restaurant_id": null,
-    "token": "UjGTFN0J6swsGtepnRzMivg-fu0Uy30FK0r9k1njzFI",
     "has_3d": false
   },
   {
     "experience_id": "31425440-8247-4d27-9340-01e251dfd598",
     "revision_id": "013ff70d-fc1e-4b3a-89fe-91ca6ae7a438",
-    "source_id": "2cb83795-23a9-47f8-b953-1eed98edb1a5",
+    "source_id": "c38d6029-e7ea-430b-90c3-a6698c70cd3a",
     "source_type": "standalone",
     "restaurant_id": null,
-    "token": "jGlMO42XucDbedhOZYj81MHUZKyOxCwDGQNSp42XZAI",
     "has_3d": true
   },
   {
     "experience_id": "7ee8bc96-d687-4bd2-b620-15f0517bad07",
     "revision_id": "0554ad65-ea2d-42fb-849c-5f205bb89bb1",
-    "source_id": "89b7bd06-850b-47b3-b942-7c447d17972c",
+    "source_id": "91f3f3b4-eacd-4aa0-a4b8-207233a05e6b",
     "source_type": "standalone",
     "restaurant_id": null,
-    "token": "pRy-sPhwDoH02hcXa-SE7EFgfqZ_D-hPWknsHQIj-t8",
     "has_3d": false
   }
 ]
