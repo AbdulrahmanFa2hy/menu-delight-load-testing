@@ -160,8 +160,8 @@ export default function () {
     }
   }
   journeys.add(ok);
-  // Ten simulated visitors share each runner IP. Respect the public 100-event
-  // per-minute IP limit rather than treating expected anti-abuse denials as capacity.
+  // Visitors share each runner IP. Keep realistic think time and count every
+  // anti-abuse denial as a failed operation; never bypass the public rate guards.
   sleep(5 + Math.random() * 3);
 }
 export function handleSummary(data) {
