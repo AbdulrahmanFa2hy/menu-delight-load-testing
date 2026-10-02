@@ -28,6 +28,10 @@ const trackingLatency = new Trend('tracking_session_duration', true);
 const assetLatency = new Trend('tracking_asset_duration', true);
 const gameLatency = new Trend('game_session_duration', true);
 const analyticsAccepted = new Counter('analytics_accepted');
+const analyticsRateLimited = new Counter('menu_analytics_rate_limited');
+const functionRateLimited = new Counter('function_rate_limited');
+const functionUnavailable = new Counter('function_unavailable');
+const functionTransportErrors = new Counter('function_transport_errors');
 
 export const options = {
   scenarios: { workload: { executor: 'ramping-vus', startVUs: 0, stages: [
@@ -50,7 +54,11 @@ function uuid() {
 function body(response) { try { return response.json(); } catch { return null; } }
 function checked(ok, metric) { errors.add(!ok); if (metric) metric.add(ok); return ok; }
 function post(slug, payload) {
-  return http.post(`${supabaseUrl}/functions/v1/${slug}`, JSON.stringify(payload), { headers, timeout: '15s', tags: { name: slug } });
+  const response = http.post(`${supabaseUrl}/functions/v1/${slug}`, JSON.stringify(payload), { headers, timeout: '15s', tags: { name: slug } });
+  functionRateLimited.add(response.status === 429 ? 1 : 0);
+  functionUnavailable.add(response.status >= 500 ? 1 : 0);
+  functionTransportErrors.add(response.status === 0 ? 1 : 0);
+  return response;
 }
 function asset(url) {
   // Capabilities may only be sent to the configured site or backend origin.
@@ -67,6 +75,7 @@ function menuEvent(restaurant, item) {
     headers: { 'Content-Type': 'application/json', Origin: site }, timeout: '15s', tags: { name: 'menu-analytics' },
   });
   const ok = checked(res.status === 202 && body(res)?.accepted === 1, analyticsDelivery);
+  analyticsRateLimited.add(res.status === 429 ? 1 : 0);
   if (ok) analyticsAccepted.add(1);
   return ok;
 }
@@ -113,7 +122,9 @@ export default function () {
     }
   }
   journeys.add(ok);
-  sleep(1.5 + Math.random() * 1.5);
+  // Ten simulated visitors share each runner IP. Respect the public 100-event
+  // per-minute IP limit rather than treating expected anti-abuse denials as capacity.
+  sleep(5 + Math.random() * 3);
 }
 export function handleSummary(data) {
   data.meta = { node_index: nodeIndex, run_id: __ENV.RUN_ID, configured_vus: peak,

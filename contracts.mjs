@@ -41,5 +41,8 @@ export function aggregateSummaries(summaries, expectedNodes = 10) {
   return { passed: nodes.every(n => n.passed), nodes, http_requests: count('http_reqs'), wall_seconds: wallSeconds,
     average_requests_per_second: count('http_reqs') / wallSeconds, http_failures: rate('http_req_failed'), checked_errors: rate('errors'),
     journeys: rate('journey_success'), menu_hits: rate('menu_edge_hit'), asset_hits: rate('asset_edge_hit'), latencies,
-    client_acknowledged_events: count('analytics_accepted') };
+    client_acknowledged_events: count('analytics_accepted'), diagnostics: {
+      menu_analytics_429: count('menu_analytics_rate_limited'), function_429: count('function_rate_limited'),
+      function_5xx: count('function_unavailable'), function_transport_errors: count('function_transport_errors'),
+    } };
 }

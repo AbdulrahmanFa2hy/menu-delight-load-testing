@@ -17,7 +17,8 @@ try {
     `| Average request rate across measured wall time | ${result.average_requests_per_second.toFixed(1)}/s |\n` +
     `| HTTP failure rate | ${percent(result.http_failures)} |\n| Checked operation failure rate | ${percent(result.checked_errors)} |\n` +
     `| Completed journeys | ${percent(result.journeys)} |\n| Menu cache HIT | ${percent(result.menu_hits)} |\n| Asset cache HIT | ${percent(result.asset_hits)} |\n` +
-    `| Client acknowledged events | ${result.client_acknowledged_events} |\n\n` +
+    `| Client acknowledged events | ${result.client_acknowledged_events} |\n` +
+    `| Menu analytics 429 / function 429 / function 5xx / function transport errors | ${Object.values(result.diagnostics).join(' / ')} |\n\n` +
     `Latency figures below are the mean and worst **per-node P95**, not a global percentile. Runner regions are not controlled or verified. Acknowledgements do not prove database persistence or zero event loss.\n\n` +
     `| Operation | Mean node P95 (ms) | Worst node P95 (ms) |\n|---|---|---|\n` +
     Object.entries(result.latencies).map(([name, v]) => `| ${name} | ${v.mean_node_p95_ms?.toFixed(1) ?? 'N/A'} | ${v.worst_node_p95_ms?.toFixed(1) ?? 'N/A'} |`).join('\n') +
