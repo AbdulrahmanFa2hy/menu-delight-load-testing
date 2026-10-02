@@ -33,12 +33,20 @@ const analyticsRateLimited = new Counter('menu_analytics_rate_limited');
 const functionRateLimited = new Counter('function_rate_limited');
 const functionUnavailable = new Counter('function_unavailable');
 const functionTransportErrors = new Counter('function_transport_errors');
+const requestTimeouts = new Counter('request_timeouts');
+const requestCancellations = new Counter('request_cancellations');
+const otherTransportErrors = new Counter('other_transport_errors');
+const unexpectedClientErrors = new Counter('unexpected_client_errors');
+const edgeServerErrors = new Counter('edge_server_errors');
+const edgeChallenges = new Counter('edge_challenges');
 
 export const options = {
   userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   scenarios: { workload: { executor: 'ramping-vus', startVUs: 0, stages: [
     { duration: '15s', target: peak }, { duration: `${hold}s`, target: peak }, { duration: '10s', target: 0 },
-  ], gracefulRampDown: '10s', gracefulStop: '10s' } },
+  // A tracking journey can take up to 78s at the individual request deadlines.
+  // Let it finish; request deadlines and all latency/error thresholds stay fixed.
+  ], gracefulRampDown: '90s', gracefulStop: '90s' } },
   thresholds: {
     http_req_failed: ['rate<0.01'], errors: ['rate<0.01'], journey_success: ['rate>0.99'],
     tracking_admission_success: ['rate>0.99'], game_admission_success: ['rate>0.99'],
@@ -55,17 +63,30 @@ function uuid() {
 }
 function body(response) { try { return response.json(); } catch { return null; } }
 function checked(ok, metric) { errors.add(!ok); if (metric) metric.add(ok); return ok; }
+function observed(response, expectedDenial = false) {
+  const failed = response.status === 0;
+  const timeout = failed && response.error_code === 1050;
+  const cancelled = failed && /cancel(?:led|ed)/i.test(response.error ?? '');
+  requestTimeouts.add(timeout ? 1 : 0);
+  requestCancellations.add(cancelled ? 1 : 0);
+  otherTransportErrors.add(failed && !timeout && !cancelled ? 1 : 0);
+  unexpectedClientErrors.add(!expectedDenial && response.status >= 400 && response.status < 500 ? 1 : 0);
+  edgeServerErrors.add(response.status >= 500 ? 1 : 0);
+  edgeChallenges.add((response.headers['Cf-Mitigated'] ?? response.headers['cf-mitigated']) === 'challenge' ? 1 : 0);
+  // Never log response.error: it can contain a private capability URL.
+  return response;
+}
 function post(slug, payload) {
   const response = http.post(`${supabaseUrl}/functions/v1/${slug}`, JSON.stringify(payload), { headers, timeout: '15s', tags: { name: slug } });
   functionRateLimited.add(response.status === 429 ? 1 : 0);
   functionUnavailable.add(response.status >= 500 ? 1 : 0);
   functionTransportErrors.add(response.status === 0 ? 1 : 0);
-  return response;
+  return observed(response);
 }
 function asset(url) {
   // Capabilities may only be sent to the configured site or backend origin.
   if (typeof url !== 'string' || !(url.startsWith(site + '/') || url.startsWith(supabaseUrl + '/'))) return checked(false, assets);
-  const res = http.get(url, { timeout: '20s', redirects: 0, tags: { name: 'protected-asset' } });
+  const res = observed(http.get(url, { timeout: '20s', redirects: 0, tags: { name: 'protected-asset' } }));
   edgeHitAssets.add((res.headers['X-Ar-Asset-Cache'] ?? res.headers['x-ar-asset-cache']) === 'HIT');
   assetLatency.add(res.timings.duration);
   return checked(res.status === 200 && res.body?.length > 0, assets);
@@ -73,9 +94,9 @@ function asset(url) {
 function menuEvent(restaurant, item) {
   const event = { id: uuid(), event_type: item ? 'live_preview_open' : 'menu_open', restaurant_id: restaurant };
   if (item) event.item_id = item;
-  const res = http.post(site + '/api/analytics/events', JSON.stringify({ events: [event] }), {
+  const res = observed(http.post(site + '/api/analytics/events', JSON.stringify({ events: [event] }), {
     headers: { 'Content-Type': 'application/json', Origin: site }, timeout: '15s', tags: { name: 'menu-analytics' },
-  });
+  }));
   const ok = checked(res.status === 202 && body(res)?.accepted === 1, analyticsDelivery);
   analyticsRateLimited.add(res.status === 429 ? 1 : 0);
   if (ok) analyticsAccepted.add(1);
@@ -85,13 +106,13 @@ export function setup() {
   // Denial is expected for these fixtures and is verified separately from the
   // successful visitor workload. Do not change restaurant access settings.
   for (const restaurant of pausedRestaurants) {
-    const menu = http.get(`${site}/api/public-menu/${restaurant}`, {
+    const menu = observed(http.get(`${site}/api/public-menu/${restaurant}`, {
       timeout: '15s', responseCallback: http.expectedStatuses(404), tags: { name: 'paused-menu-denial' },
-    });
-    const event = http.post(site + '/api/analytics/events', JSON.stringify({ events: [{ id: uuid(), event_type: 'menu_open', restaurant_id: restaurant }] }), {
+    }), true);
+    const event = observed(http.post(site + '/api/analytics/events', JSON.stringify({ events: [{ id: uuid(), event_type: 'menu_open', restaurant_id: restaurant }] }), {
       headers: { 'Content-Type': 'application/json', Origin: site }, timeout: '15s',
       responseCallback: http.expectedStatuses(400), tags: { name: 'paused-analytics-denial' },
-    });
+    }), true);
     if (menu.status !== 404 || event.status !== 400 || body(event)?.error !== 'unavailable_event_target')
       throw new Error('Paused fixture denial preflight failed');
   }
@@ -101,9 +122,9 @@ export default function () {
   const roll = Math.random();
   if (roll < 0.60) {
     const restaurant = restaurants[Math.floor(Math.random() * restaurants.length)];
-    const page = http.get(`${site}/menu/${restaurant}`, { timeout: '15s', tags: { name: 'menu-page' } });
+    const page = observed(http.get(`${site}/menu/${restaurant}`, { timeout: '15s', tags: { name: 'menu-page' } }));
     ok = checked(page.status === 200) && ok;
-    const menu = http.get(`${site}/api/public-menu/${restaurant}`, { timeout: '15s', tags: { name: 'public-menu' } });
+    const menu = observed(http.get(`${site}/api/public-menu/${restaurant}`, { timeout: '15s', tags: { name: 'public-menu' } }));
     edgeHitMenu.add((menu.headers['Cf-Cache-Status'] ?? menu.headers['CF-Cache-Status']) === 'HIT');
     menuLatency.add(menu.timings.duration);
     ok = checked(menu.status === 200 && body(menu) !== null) && ok;
@@ -132,7 +153,7 @@ export default function () {
     const data = body(res);
     ok = checked(sessionAllowed(res.status, data), gameAdmission);
     if (ok) {
-      const xr = http.get(site + '/external/xr/v-c4781db3f6e5f3ec8285/xr.js', { timeout: '15s', tags: { name: 'xr-engine' } });
+      const xr = observed(http.get(site + '/external/xr/v-c4781db3f6e5f3ec8285/xr.js', { timeout: '15s', tags: { name: 'xr-engine' } }));
       ok = checked(xr.status === 200 && xr.body?.length > 0) && ok;
       const end = post('entertainment-session', { game_key: gameKey, session_token: data.session_token, action: 'end' });
       ok = checked(end.status === 200 && body(end)?.success === true) && ok;

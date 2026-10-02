@@ -15,8 +15,14 @@ export function aggregateSummaries(summaries, expectedNodes = 10) {
     indices.add(meta.node_index);
     if (!meta.run_id || meta.run_id !== first.run_id || meta.configured_vus !== first.configured_vus ||
       !(meta.duration_ms > 0) || !Number.isFinite(Date.parse(meta.finished_at))) throw new Error('Invalid or mixed run metadata');
-    for (const required of ['http_reqs', 'errors', 'journey_success', 'tracking_admission_success', 'game_admission_success', 'asset_success', 'analytics_delivery_success'])
-      if (!data.metrics?.[required]) throw new Error(`Missing required metric: ${required}`);
+    if (!Number.isFinite(meta.configured_vus) || meta.configured_vus < 1 || !Number.isFinite(meta.duration_ms) || !(data.metrics?.http_reqs?.values?.count > 0))
+      throw new Error('Node performed no valid workload');
+    for (const required of ['http_req_failed', 'errors', 'journey_success', 'tracking_admission_success', 'game_admission_success', 'asset_success', 'analytics_delivery_success',
+      'menu_read_duration', 'tracking_session_duration', 'tracking_asset_duration', 'game_session_duration']) {
+      const metric = data.metrics?.[required];
+      if (!metric || !Object.keys(metric.thresholds ?? {}).length) throw new Error(`Missing required metric or thresholds: ${required}`);
+      if ('rate' in (metric.values ?? {}) && !(metric.values.passes + metric.values.fails > 0)) throw new Error(`Metric has no samples: ${required}`);
+    }
   }
   const count = name => summaries.reduce((n, d) => n + (d.metrics[name]?.values?.count ?? 0), 0);
   const rate = name => {
@@ -44,5 +50,8 @@ export function aggregateSummaries(summaries, expectedNodes = 10) {
     client_acknowledged_events: count('analytics_accepted'), diagnostics: {
       menu_analytics_429: count('menu_analytics_rate_limited'), function_429: count('function_rate_limited'),
       function_5xx: count('function_unavailable'), function_transport_errors: count('function_transport_errors'),
+      request_timeouts: count('request_timeouts'), request_cancellations: count('request_cancellations'),
+      other_transport_errors: count('other_transport_errors'), unexpected_client_errors: count('unexpected_client_errors'),
+      edge_server_errors: count('edge_server_errors'), edge_challenges: count('edge_challenges'),
     } };
 }
