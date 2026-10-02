@@ -1,7 +1,7 @@
 import http from 'k6/http';
 import { sleep } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
-import { sessionAllowed } from './contracts.mjs';
+import { sessionAllowed, transportFailureKind, transportErrorCodes } from './contracts.mjs';
 
 const mapping = JSON.parse(open('./restaurant-items.json'));
 const pausedRestaurants = JSON.parse(open('./paused-restaurants.json'));
@@ -39,6 +39,9 @@ const otherTransportErrors = new Counter('other_transport_errors');
 const unexpectedClientErrors = new Counter('unexpected_client_errors');
 const edgeServerErrors = new Counter('edge_server_errors');
 const edgeChallenges = new Counter('edge_challenges');
+const transportKinds = Object.fromEntries(['timeout', 'dns', 'tcp', 'tls', 'http2', 'decompression', 'eof', 'other']
+  .map(kind => [kind, new Counter(`transport_${kind}_errors`)]));
+const transportCodes = Object.fromEntries(transportErrorCodes.map(code => [code, new Counter(`transport_code_${code}`)]));
 
 export const options = {
   userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -73,6 +76,11 @@ function observed(response, expectedDenial = false) {
   unexpectedClientErrors.add(!expectedDenial && response.status >= 400 && response.status < 500 ? 1 : 0);
   edgeServerErrors.add(response.status >= 500 ? 1 : 0);
   edgeChallenges.add((response.headers['Cf-Mitigated'] ?? response.headers['cf-mitigated']) === 'challenge' ? 1 : 0);
+  if (failed) {
+    const code = Number(response.error_code);
+    transportKinds[transportFailureKind(response.status, code, response.error)].add(1);
+    (transportCodes[code] ?? transportCodes[0]).add(1);
+  }
   // Never log response.error: it can contain a private capability URL.
   return response;
 }

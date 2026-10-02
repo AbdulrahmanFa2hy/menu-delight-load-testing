@@ -1,7 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sessionAllowed, aggregateSummaries } from './contracts.mjs';
+import { sessionAllowed, aggregateSummaries, transportFailureKind, transportErrorCodes } from './contracts.mjs';
 
+test('transport categories distinguish DNS, TCP, TLS, HTTP/2 and deadlines', () => {
+  for (const [code, kind] of [[1050, 'timeout'], [1100, 'dns'], [1199, 'dns'],
+    [1201, 'tcp'], [1220, 'tcp'], [1300, 'tls'], [1311, 'tls'],
+    [1600, 'http2'], [1633, 'http2'], [1669, 'http2'], [1701, 'decompression']]) {
+    assert.equal(transportFailureKind(0, code), kind);
+  }
+  assert.equal(transportFailureKind(200, 1220), null);
+  assert.equal(transportFailureKind(503, 1503), null);
+  assert.equal(transportFailureKind(0, 1000), 'other');
+});
+test('EOF labels cannot contain an error string or private URL', () => {
+  const secret = 'https://private.example/asset?token=never-publish-this';
+  for (const ending of ['EOF', 'unexpected EOF']) {
+    const label = transportFailureKind(0, 1000, `Post "${secret}": ${ending}`);
+    assert.equal(label, 'eof');
+    assert.ok(!label.includes(secret));
+  }
+  assert.equal(transportFailureKind(0, 1000, secret), 'other');
+});
 test('HTTP 200 unavailable does not count as successful admission', () => {
   assert.equal(sessionAllowed(200, { status: 'unavailable' }), false);
   assert.equal(sessionAllowed(200, { status: 'allowed' }), false);
@@ -26,6 +45,16 @@ test('rates are weighted by samples and a failed node fails the aggregate', () =
   assert.equal(result.passed, false);
   assert.equal(result.average_requests_per_second, 10);
   assert.equal(result.nodes[1].failed_thresholds.length, 1);
+});
+test('aggregation retains numeric transport codes and failed thresholds', () => {
+  const data = summary(1, 1, 1, false);
+  data.metrics.transport_code_1633 = { values: { count: 2 } };
+  data.metrics.transport_http2_errors = { values: { count: 2 } };
+  const result = aggregateSummaries([data], 1);
+  assert.deepEqual(result.transport_error_codes, {1633: 2});
+  assert.equal(result.diagnostics.transport_http2_errors, 2);
+  assert.equal(result.passed, false);
+  assert.equal(new Set(transportErrorCodes).size, transportErrorCodes.length);
 });
 test('missing metrics, omitted thresholds and empty traffic cannot pass', () => {
   const missing = summary(1); delete missing.metrics.game_session_duration;

@@ -4,6 +4,23 @@ export function sessionAllowed(status, body) {
     typeof body.session_id === 'string' && body.session_id.length > 0;
 }
 
+// Fixed labels only: raw errors can contain private capability URLs.
+export function transportFailureKind(status, code, message = '') {
+  if (status !== 0) return null;
+  if (code === 1050) return 'timeout';
+  if (code >= 1100 && code < 1200) return 'dns';
+  if (code >= 1200 && code < 1300) return 'tcp';
+  if (code >= 1300 && code < 1400) return 'tls';
+  if (code >= 1600 && code < 1700) return 'http2';
+  if (code === 1701) return 'decompression';
+  if (/(?:^|[ :])(?:unexpected )?EOF$/i.test(String(message).trim())) return 'eof';
+  return 'other';
+}
+export const transportErrorCodes = [0, 1000, 1010, 1020, 1050, 1100, 1101, 1110, 1111,
+  1200, 1201, 1202, 1210, 1211, 1212, 1213, 1220, 1300, 1310, 1311, 1600, 1610,
+  1630, 1650, 1701, ...Array.from({length: 19}, (_, i) => 1611 + i),
+  ...Array.from({length: 19}, (_, i) => 1631 + i), ...Array.from({length: 19}, (_, i) => 1651 + i)];
+
 export function aggregateSummaries(summaries, expectedNodes = 10) {
   if (summaries.length !== expectedNodes) throw new Error(`Expected ${expectedNodes} summaries; received ${summaries.length}`);
   const indices = new Set();
@@ -47,11 +64,15 @@ export function aggregateSummaries(summaries, expectedNodes = 10) {
   return { passed: nodes.every(n => n.passed), nodes, http_requests: count('http_reqs'), wall_seconds: wallSeconds,
     average_requests_per_second: count('http_reqs') / wallSeconds, http_failures: rate('http_req_failed'), checked_errors: rate('errors'),
     journeys: rate('journey_success'), menu_hits: rate('menu_edge_hit'), asset_hits: rate('asset_edge_hit'), latencies,
-    client_acknowledged_events: count('analytics_accepted'), diagnostics: {
+    client_acknowledged_events: count('analytics_accepted'),
+    transport_error_codes: Object.fromEntries(transportErrorCodes.map(code => [code, count(`transport_code_${code}`)]).filter(([, n]) => n > 0)),
+    diagnostics: {
       menu_analytics_429: count('menu_analytics_rate_limited'), function_429: count('function_rate_limited'),
       function_5xx: count('function_unavailable'), function_transport_errors: count('function_transport_errors'),
       request_timeouts: count('request_timeouts'), request_cancellations: count('request_cancellations'),
       other_transport_errors: count('other_transport_errors'), unexpected_client_errors: count('unexpected_client_errors'),
       edge_server_errors: count('edge_server_errors'), edge_challenges: count('edge_challenges'),
+      ...Object.fromEntries(['timeout', 'dns', 'tcp', 'tls', 'http2', 'decompression', 'eof', 'other']
+        .map(kind => [`transport_${kind}_errors`, count(`transport_${kind}_errors`)])),
     } };
 }
