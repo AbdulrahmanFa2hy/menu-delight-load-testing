@@ -1,0 +1,93 @@
+name: Distributed Multi-Experience Load Test (10,000+ VUs)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_vus:
+        description: 'Total Virtual Users (across all 10 nodes)'
+        required: true
+        default: '10000'
+        type: choice
+        options:
+          - '2000'
+          - '5000'
+          - '10000'
+          - '15000'
+          - '20000'
+      duration_seconds:
+        description: 'Hold Duration in Seconds'
+        required: true
+        default: '60'
+        type: choice
+        options:
+          - '30'
+          - '60'
+          - '120'
+          - '180'
+
+jobs:
+  distributed-load-test:
+    name: Node ${{ matrix.node }} (Multi-Region Traffic)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+    steps:
+      - name: Checkout Benchmark Repository
+        uses: actions/checkout@v4
+
+      - name: Setup k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Calculate Node Share of VUs
+        id: calc
+        run: |
+          TOTAL_VUS=${{ github.event.inputs.target_vus }}
+          NODE_VUS=$(( TOTAL_VUS / 10 ))
+          echo "node_vus=$NODE_VUS" >> $GITHUB_OUTPUT
+          echo "Node ${{ matrix.node }} will launch $NODE_VUS Virtual Users."
+
+      - name: Run Multi-Experience Load Test
+        env:
+          SITE_URL: 'https://qr.gilgaamesh.com'
+          SUPABASE_URL: 'https://supabase.gilgaamesh.com'
+          ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InlneGR4ZW5iaXd1bHVjb2t2c3J1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDkyMzY2NDUsImV4cCI6MjA2NDgxMjY0NX0.9lqR9YdD7uB9C7tF5xG3vK2mJ8wP4qS6tU1zX0yA3bE'
+          PEAK_VUS: ${{ steps.calc.outputs.node_vus }}
+          DURATION_SECONDS: ${{ github.event.inputs.duration_seconds }}
+          NODE_INDEX: ${{ matrix.node }}
+        run: |
+          k6 run --quiet k6-multi-experience.mjs
+
+      - name: Upload Summary Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: summary-node-${{ matrix.node }}
+          path: summary-node-${{ matrix.node }}.json
+          if-no-files-found: ignore
+
+  aggregate-benchmark:
+    name: Aggregate Benchmark Results
+    needs: distributed-load-test
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Benchmark Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Download all node summaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: summary-node-*
+          path: summaries
+          merge-multiple: true
+
+      - name: Run Global Aggregator
+        run: node aggregate.mjs
