@@ -6,6 +6,7 @@ import os from 'node:os';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import { sessionAllowed, aggregateSummaries, transportFailureKind, transportErrorCodes, workloadThresholds, sanitizeDiagnostic, diagnosticBodyKind } from './contracts.mjs';
+import {capacityPlan, capacityStages} from './capacity-plan.mjs';
 
 test('transport categories distinguish DNS, TCP, TLS, HTTP/2 and deadlines', () => {
   for (const [code, kind] of [[1050, 'timeout'], [1100, 'dns'], [1199, 'dns'],
@@ -139,5 +140,65 @@ test('public exporter keeps failed request correlation but drops raw metric secr
     assert.ok(!output.includes(secret));
     const data = JSON.parse(output); assert.equal(data.failures, 1); assert.equal(data.records[0].request_id, tags.request_id);
     assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'summary-node-1.json'))).meta.generator_network.k6_verified, true);
+  } finally { fs.rmSync(directory, {recursive: true, force: true}); }
+});
+
+test('larger stages require verified concurrent generator capacity and bounded diagnostics', () => {
+  const nodes = [10, 10, 10, 10, 20, 30, 50, 75, 100];
+  capacityStages.forEach((vus, i) => {
+    const plan = capacityPlan(vus, 100);
+    assert.equal(plan.nodes, nodes[i]);
+    assert.equal(plan.nodes * plan.vus_per_node, vus);
+    assert.ok(plan.expected_public_events_per_ip_second < plan.public_events_per_ip_second_budget);
+  });
+  assert.throws(() => capacityPlan(2000, 10), /Need 20/);
+  assert.throws(() => capacityPlan(10000, 20), /Need 100/);
+  assert.throws(() => capacityPlan(500, 10, true), /250/);
+  assert.throws(() => capacityPlan(1000, 0));
+  assert.throws(() => capacityPlan(123, 10));
+});
+
+function readySummary(node, startOffset = 0, ip = String(node).repeat(64)) {
+  const data = summary(node, 1, 0);
+  data.meta.configured_vus = 100;
+  data.meta.capacity_validation = {schema: 1, hold_seconds: 300, scheduled_start_ms: 1791036000000,
+    scenario_start_ms: 1791036000000 + startOffset, observed_peak_vus: 100};
+  data.meta.generator_network = {ip_fingerprint: ip, k6_verified: true, colo: 'IAD'};
+  return data;
+}
+test('queued or missing peak workloads and unverified exits cannot certify capacity', () => {
+  const a = readySummary(1), b = readySummary(2, 500);
+  let result = aggregateSummaries([a, b], 2);
+  assert.equal(result.passed, true);
+  assert.equal(result.capacity_readiness.total_configured_vus, 200);
+  assert.equal(result.capacity_readiness.common_peak_hold_ms, 299500);
+  b.meta.capacity_validation.scenario_start_ms += 60000;
+  assert.equal(aggregateSummaries([a, b], 2).passed, false);
+  b.meta.capacity_validation.scenario_start_ms = a.meta.capacity_validation.scenario_start_ms;
+  b.meta.capacity_validation.observed_peak_vus = 99;
+  assert.equal(aggregateSummaries([a, b], 2).passed, false);
+  b.meta.capacity_validation.observed_peak_vus = 100;
+  b.meta.generator_network.k6_verified = false;
+  assert.equal(aggregateSummaries([a, b], 2).passed, false);
+});
+test('shared exits must fit the reserved public rate budget', () => {
+  const a = readySummary(1), b = readySummary(2, 0, a.meta.generator_network.ip_fingerprint);
+  assert.equal(aggregateSummaries([a, b], 2).passed, false);
+  a.meta.configured_vus = b.meta.configured_vus = 25;
+  assert.equal(aggregateSummaries([a, b], 2).passed, true);
+});
+test('standard runs verify the k6 exit without uploading raw metric or setup data', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'benchmark-network-'));
+  try {
+    const network = {ip_fingerprint: 'a'.repeat(64), colo: 'IAD', cpu_count: 4};
+    fs.writeFileSync(path.join(directory, 'generator-network.json'), JSON.stringify(network));
+    fs.writeFileSync(path.join(directory, 'summary-node-100.json'), JSON.stringify({meta: {generator_probe: network}}));
+    const script = fileURLToPath(new URL('./collect-diagnostics.mjs', import.meta.url));
+    execFileSync(process.execPath, [script], {cwd: directory, env: {...process.env, RUNNER_TEMP: directory, NODE_INDEX: '100'}, stdio: 'pipe'});
+    let data = JSON.parse(fs.readFileSync(path.join(directory, 'summary-node-100.json')));
+    assert.equal(data.meta.generator_network.k6_verified, true);
+    assert.equal(data.meta.generator_probe, undefined);
+    fs.writeFileSync(path.join(directory, 'summary-node-100.json'), JSON.stringify({meta: {generator_probe: {...network, ip_fingerprint: 'b'.repeat(64)}}}));
+    assert.throws(() => execFileSync(process.execPath, [script], {cwd: directory, env: {...process.env, RUNNER_TEMP: directory, NODE_INDEX: '100'}, stdio: 'pipe'}));
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
 });

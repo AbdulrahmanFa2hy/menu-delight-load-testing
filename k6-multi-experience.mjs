@@ -2,6 +2,7 @@ import http from 'k6/http';
 import { sleep } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
 import crypto from 'k6/crypto';
+import execution from 'k6/execution';
 import { sessionAllowed, transportFailureKind, transportErrorCodes, workloadThresholds, diagnosticBodyKind } from './contracts.mjs';
 
 const mapping = JSON.parse(open('./restaurant-items.json'));
@@ -52,10 +53,12 @@ const transportKinds = Object.fromEntries(['timeout', 'dns', 'tcp', 'tls', 'http
 const transportCodes = Object.fromEntries(transportErrorCodes.map(code => [code, new Counter(`transport_code_${code}`)]));
 const diagnosticRequests = new Counter('request_diagnostic');
 const generatorExitProbe = new Counter('generator_exit_probe');
+const generatorWorkloadStart = new Trend('generator_workload_start');
 
 export const options = {
   ...(route === 'backend_origin' ? {hosts: {'supabase.gilgaamesh.com': __ENV.ORIGIN_ADDRESS}} : {}),
   noVUConnectionReuse: connections === 'fresh_iteration',
+  setupTimeout: '60s',
   // Private URL and raw-error tags must never enter diagnostic output.
   systemTags: ['status', 'method', 'name', 'scenario', 'error_code', 'proto'],
   userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -140,14 +143,16 @@ function menuEvent(restaurant, item) {
   return ok;
 }
 export function setup() {
-  if (capture) {
+  let generatorNetwork;
+  {
     const trace = http.get('https://www.cloudflare.com/cdn-cgi/trace', {
       timeout: '10s', tags: {name: 'generator-exit-probe'},
     });
     const fields = Object.fromEntries((trace.body ?? '').trim().split('\n').map(line => line.split('=', 2)));
     if (trace.status !== 200 || !/^\d{1,3}(\.\d{1,3}){3}$/.test(fields.ip ?? '') || !/^[A-Z]{3}$/.test(fields.colo ?? ''))
       throw new Error('Generator exit verification failed');
-    generatorExitProbe.add(1, {ip_fingerprint: crypto.sha256(__ENV.RUN_ID + '|' + fields.ip, 'hex'), colo: fields.colo});
+    generatorNetwork = {ip_fingerprint: crypto.sha256(__ENV.RUN_ID + '|' + fields.ip, 'hex'), colo: fields.colo};
+    if (capture) generatorExitProbe.add(1, generatorNetwork);
   }
   // Denial is expected for these fixtures and is verified separately from the
   // successful visitor workload. Do not change restaurant access settings.
@@ -162,8 +167,15 @@ export function setup() {
     if (menu.status !== 404 || event.status !== 400 || body(event)?.error !== 'unavailable_event_target')
       throw new Error('Paused fixture denial preflight failed');
   }
+  if (__ENV.RUN_START_MS) {
+    const start = Number(__ENV.RUN_START_MS);
+    if (!Number.isSafeInteger(start) || Date.now() >= start) throw new Error('Generator missed the scheduled workload start');
+    sleep((start - Date.now()) / 1000);
+  }
+  return {generator_network: generatorNetwork};
 }
 export default function () {
+  if (__ITER === 0) generatorWorkloadStart.add(execution.scenario.startTime);
   let ok = true;
   const roll = mode === 'tracking' ? 0.7 : mode === 'games' ? 0.9 : Math.random();
   if (roll < 0.60) {
@@ -214,6 +226,11 @@ export function handleSummary(data) {
   data.meta = { node_index: nodeIndex, run_id: __ENV.RUN_ID, configured_vus: peak,
     workload_mode: mode, backend_route: route, connections, diagnostic_capture: capture,
     active_restaurants: restaurants.length, paused_restaurants_checked: pausedRestaurants.length,
-    duration_ms: data.state.testRunDurationMs, finished_at: new Date().toISOString() };
+    duration_ms: data.state.testRunDurationMs, finished_at: new Date().toISOString(),
+    generator_probe: data.setup_data?.generator_network,
+    capacity_validation: {schema: 1, hold_seconds: hold, scheduled_start_ms: Number(__ENV.RUN_START_MS),
+      scenario_start_ms: data.metrics.generator_workload_start?.values?.max, observed_peak_vus: data.metrics.vus?.values?.max} };
+  // setup() returns only the safe network probe. Never export arbitrary setup data.
+  delete data.setup_data;
   return { [`summary-node-${nodeIndex}.json`]: JSON.stringify(data, null, 2) };
 }

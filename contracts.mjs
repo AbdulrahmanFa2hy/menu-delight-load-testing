@@ -55,7 +55,34 @@ export function sanitizeDiagnostic(tags, utc) {
   return result;
 }
 
+export function capacityReadiness(summaries) {
+  if (!summaries.some(d => d.meta.capacity_validation)) return null;
+  const failures = [];
+  const first = summaries[0].meta.capacity_validation;
+  const starts = [];
+  const exits = new Map();
+  for (const data of summaries) {
+    const meta = data.meta, v = meta.capacity_validation, network = meta.generator_network;
+    if (!v || v.schema !== 1 || v.hold_seconds !== first.hold_seconds || v.scheduled_start_ms !== first.scheduled_start_ms ||
+      ![30, 60, 120, 300].includes(v.hold_seconds) || !Number.isSafeInteger(v.scheduled_start_ms) ||
+      !Number.isSafeInteger(v.scenario_start_ms) || v.scenario_start_ms < v.scheduled_start_ms || v.scenario_start_ms > v.scheduled_start_ms + 2000 ||
+      !(v.observed_peak_vus >= meta.configured_vus)) failures.push(`Node ${meta.node_index}: missing or late peak workload evidence`);
+    else starts.push(v.scenario_start_ms);
+    if (!/^[0-9a-f]{64}$/.test(network?.ip_fingerprint) || network.k6_verified !== true)
+      failures.push(`Node ${meta.node_index}: generator exit was not verified by k6`);
+    else exits.set(network.ip_fingerprint, (exits.get(network.ip_fingerprint) ?? 0) + meta.configured_vus);
+  }
+  const skew = starts.length === summaries.length ? Math.max(...starts) - Math.min(...starts) : null;
+  const commonHold = skew === null ? null : first.hold_seconds * 1000 - skew;
+  // Expected menu event rate at fastest think time; actual 429s always fail SLOs.
+  const maxEvents = exits.size ? Math.max(...exits.values()) * (0.60 * 1.4 / 5) : null;
+  if (maxEvents > 25) failures.push('Actual exit-IP distribution exceeds the reserved public analytics rate budget');
+  return {passed: failures.length === 0, failures, total_configured_vus: summaries.reduce((n, d) => n + d.meta.configured_vus, 0),
+    scenario_start_skew_ms: skew, common_peak_hold_ms: commonHold, max_expected_public_events_per_ip_second: maxEvents};
+}
+
 export function aggregateSummaries(summaries, expectedNodes = 10) {
+  if (!Number.isInteger(expectedNodes) || expectedNodes < 1 || expectedNodes > 100) throw new Error('Invalid expected generator count');
   if (summaries.length !== expectedNodes) throw new Error(`Expected ${expectedNodes} summaries; received ${summaries.length}`);
   const indices = new Set();
   const first = summaries[0]?.meta;
@@ -98,7 +125,8 @@ export function aggregateSummaries(summaries, expectedNodes = 10) {
     return [name, { mean_node_p95_ms: values.length ? values.reduce((a, b) => a + b, 0) / values.length : null, worst_node_p95_ms: values.length ? Math.max(...values) : null }];
   }));
   const network = summaries.map(d => d.meta.generator_network).filter(n => /^[0-9a-f]{64}$/.test(n?.ip_fingerprint));
-  return { passed: nodes.every(n => n.passed), nodes, workload_mode: first.workload_mode ?? 'mixed',
+  const readiness = capacityReadiness(summaries);
+  return { passed: nodes.every(n => n.passed) && (readiness?.passed ?? true), nodes, capacity_readiness: readiness, workload_mode: first.workload_mode ?? 'mixed',
     backend_route: first.backend_route ?? 'cloudflare', connections: first.connections ?? 'keepalive',
     generator_network: {verified_nodes: network.length, k6_verified_nodes: network.filter(n => n.k6_verified === true).length,
       distinct_exit_ips: new Set(network.map(n => n.ip_fingerprint)).size,

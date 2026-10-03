@@ -4,7 +4,7 @@ import readline from 'node:readline';
 import {sanitizeDiagnostic} from './contracts.mjs';
 
 const node = Number(process.env.NODE_INDEX);
-if (!Number.isInteger(node) || node < 1 || node > 10) throw new Error('Invalid node identity');
+if (!Number.isInteger(node) || node < 1 || node > 100) throw new Error('Invalid node identity');
 const pidFile = path.join(process.env.RUNNER_TEMP, 'generator-monitor.pid');
 const resetPidFile = path.join(process.env.RUNNER_TEMP, 'generator-resets.pid');
 if (fs.existsSync(resetPidFile)) {
@@ -54,9 +54,11 @@ if (fs.existsSync(summary)) {
   const data = JSON.parse(fs.readFileSync(summary));
   const network = JSON.parse(fs.readFileSync(path.join(process.env.RUNNER_TEMP, 'generator-network.json')));
   if (!/^[0-9a-f]{64}$/.test(network.ip_fingerprint) || !/^[A-Z]{3}$/.test(network.colo)) throw new Error('Invalid network preflight');
-  if (fs.existsSync(raw) && !exitProbe) throw new Error('Missing k6 generator exit verification');
+  exitProbe ??= data.meta.generator_probe;
+  if (!exitProbe || !/^[0-9a-f]{64}$/.test(exitProbe.ip_fingerprint) || !/^[A-Z]{3}$/.test(exitProbe.colo)) throw new Error('Missing k6 generator exit verification');
   if (exitProbe && exitProbe.ip_fingerprint !== network.ip_fingerprint) throw new Error('Generator exit changed between preflight and k6');
   data.meta.generator_network = {ip_fingerprint: network.ip_fingerprint, colo: network.colo, cpu_count: network.cpu_count,
     ipv6_available: network.ipv6_available, proxy_configured: network.proxy_configured, k6_verified: Boolean(exitProbe)};
+  delete data.meta.generator_probe;
   fs.writeFileSync(summary, JSON.stringify(data, null, 2));
 }
