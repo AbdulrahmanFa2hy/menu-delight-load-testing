@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import {pathToFileURL} from 'node:url';
+import {workersBudget} from './workers-budget.mjs';
 
 export const capacityStages = [100, 250, 500, 1000, 2000, 3000, 5000, 7500, 10000];
 // Mixed workload: 60% menus, mean 1.4 public events, fastest 5s think time.
@@ -23,6 +24,10 @@ export function capacityPlan(total, available = 10, capture = false) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const plan = capacityPlan(Number(process.env.TOTAL_VUS), Number(process.env.AVAILABLE_RUNNER_CAPACITY || 10), process.env.DIAGNOSTIC_CAPTURE === 'true');
+  plan.workers_request_budget = workersBudget({total: plan.total_vus,
+    hold: Number(process.env.DURATION_SECONDS), mode: process.env.WORKLOAD_MODE,
+    budget: Number(process.env.WORKERS_REQUEST_BUDGET || 0),
+    verifiedAt: process.env.WORKERS_BUDGET_VERIFIED_AT || ''});
   const start = Date.now() + 120000;
   const output = `matrix=${JSON.stringify(plan.matrix)}\nnodes=${plan.nodes}\npeak_vus=${plan.vus_per_node}\nstart_ms=${start}\n`;
   fs.appendFileSync(process.env.GITHUB_OUTPUT, output);

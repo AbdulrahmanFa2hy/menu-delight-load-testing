@@ -7,6 +7,39 @@ import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import { sessionAllowed, aggregateSummaries, transportFailureKind, transportErrorCodes, workloadThresholds, sanitizeDiagnostic, diagnosticBodyKind, diagnosticPeerClass } from './contracts.mjs';
 import {capacityPlan, capacityStages} from './capacity-plan.mjs';
+import {workersBudget} from './workers-budget.mjs';
+
+test('asset workloads require enough freshly verified account-wide Workers allowance', () => {
+  const now = Date.parse('2026-10-04T00:10:00Z');
+  const config = {total: 1000, hold: 300, mode: 'mixed', now, verifiedAt: '2026-10-04T00:09:00Z'};
+  assert.throws(() => workersBudget(config), /43165/);
+  assert.equal(workersBudget({...config, budget: 43165}).required_requests, 43165);
+  assert.throws(() => workersBudget({...config, budget: 43164}), /43165/);
+  assert.throws(() => workersBudget({...config, budget: 100000, verifiedAt: '2026-10-03T23:59:00Z'}), /UTC/);
+  assert.throws(() => workersBudget({...config, budget: 100000, verifiedAt: '2026-10-04T00:11:00Z'}), /UTC/);
+  assert.throws(() => workersBudget({...config, budget: 100000, verifiedAt: ''}), /UTC/);
+  assert.throws(() => workersBudget({...config, budget: 100000, verifiedAt: '2026-02-31T00:09:00Z', now: Date.parse('2026-03-03T00:10:00Z')}), /UTC/);
+  assert.throws(() => workersBudget({...config, budget: 100000, now: Date.parse('2026-10-04T00:30:00Z')}), /UTC/);
+  assert.throws(() => workersBudget({...config, budget: 100000, now: Date.parse('2026-10-04T23:58:00Z'), verifiedAt: '2026-10-04T23:57:00Z'}), /midnight/);
+  assert.throws(() => workersBudget({...config, budget: -1}), /Invalid/);
+  assert.throws(() => workersBudget({...config, budget: Infinity}), /Invalid/);
+  assert.equal(workersBudget({...config, mode: 'games'}).required_requests, 0);
+  assert.equal(workersBudget({...config, total: 250, mode: 'tracking', budget: 100000}).required_requests, 41290);
+  assert.throws(() => workersBudget({...config, total: 5000, budget: 100000}), /215665/);
+});
+
+test('insufficient Workers budget prevents planner output before any generator can start', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'benchmark-quota-'));
+  try {
+    const output = path.join(directory, 'github-output');
+    assert.throws(() => execFileSync(process.execPath, [fileURLToPath(new URL('./capacity-plan.mjs', import.meta.url))], {
+      cwd: directory, env: {...process.env, TOTAL_VUS: '5000', AVAILABLE_RUNNER_CAPACITY: '100',
+        DURATION_SECONDS: '300', WORKLOAD_MODE: 'mixed', WORKERS_REQUEST_BUDGET: '100000',
+        WORKERS_BUDGET_VERIFIED_AT: new Date().toISOString(), GITHUB_OUTPUT: output}, stdio: 'pipe'}));
+    assert.equal(fs.existsSync(output), false);
+    assert.equal(fs.existsSync(path.join(directory, 'capacity-plan.json')), false);
+  } finally { fs.rmSync(directory, {recursive: true, force: true}); }
+});
 
 test('transport categories distinguish DNS, TCP, TLS, HTTP/2 and deadlines', () => {
   for (const [code, kind] of [[1050, 'timeout'], [1100, 'dns'], [1199, 'dns'],
