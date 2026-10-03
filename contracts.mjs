@@ -39,6 +39,25 @@ export function diagnosticBodyKind(status, text) {
   catch { return 'non_json'; }
 }
 
+export function diagnosticPeerClass(ip, origin, ranges) {
+  const numeric = value => {
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(value ?? '')) return null;
+    const octets = value.split('.').map(Number);
+    return octets.some(n => n > 255) ? null : octets.reduce((n, octet) => ((n << 8) | octet) >>> 0, 0);
+  };
+  const address = numeric(ip);
+  if (address === null) return 'unknown';
+  if (ip === origin) return 'configured_origin';
+  for (const range of ranges) {
+    const [prefix, bits] = range.split('/');
+    const network = numeric(prefix), width = Number(bits);
+    if (network === null || !Number.isInteger(width) || width < 1 || width > 32) throw new Error('Invalid peer classification range');
+    const mask = (0xffffffff << (32 - width)) >>> 0;
+    if (((address & mask) >>> 0) === ((network & mask) >>> 0)) return 'cloudflare';
+  }
+  return 'other';
+}
+
 export function sanitizeDiagnostic(tags, utc) {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
   const services = ['image-tracking-session', 'image-tracking-event', 'entertainment-session', 'menu-page', 'public-menu', 'menu-analytics', 'protected-asset', 'xr-engine', 'other'];
@@ -48,6 +67,7 @@ export function sanitizeDiagnostic(tags, utc) {
     status: Number(tags.status), error_code: Number(tags.error_code), started_ms: Number(tags.started_ms), duration_ms: Number(tags.duration_ms),
     body_kind: tags.body_kind, proto: ['HTTP/1.0', 'HTTP/1.1', 'HTTP/2.0'].includes(tags.proto) ? tags.proto : 'unknown',
     peer_ip_fingerprint: /^[0-9a-f]{64}$/.test(tags.peer_ip_fingerprint ?? '') ? tags.peer_ip_fingerprint : null,
+    peer_class: ['cloudflare', 'configured_origin', 'other', 'unknown'].includes(tags.peer_class) ? tags.peer_class : 'unknown',
     client_port: /^\d{1,5}$/.test(tags.client_port ?? '') && Number(tags.client_port) > 0 && Number(tags.client_port) <= 65535 ? Number(tags.client_port) : null,
     cf_ray: /^[0-9a-f]{16}-[A-Z]{3}$/.test(tags.cf_ray) ? tags.cf_ray : null};
   for (const phase of ['blocked', 'connecting', 'tls_handshaking', 'sending', 'waiting', 'receiving']) {

@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import { sessionAllowed, aggregateSummaries, transportFailureKind, transportErrorCodes, workloadThresholds, sanitizeDiagnostic, diagnosticBodyKind } from './contracts.mjs';
+import { sessionAllowed, aggregateSummaries, transportFailureKind, transportErrorCodes, workloadThresholds, sanitizeDiagnostic, diagnosticBodyKind, diagnosticPeerClass } from './contracts.mjs';
 import {capacityPlan, capacityStages} from './capacity-plan.mjs';
 
 test('transport categories distinguish DNS, TCP, TLS, HTTP/2 and deadlines', () => {
@@ -156,7 +156,9 @@ test('larger stages require verified concurrent generator capacity and bounded d
   });
   assert.throws(() => capacityPlan(2000, 10), /Need 20/);
   assert.throws(() => capacityPlan(10000, 20), /Need 100/);
-  assert.throws(() => capacityPlan(500, 10, true), /250/);
+  assert.equal(capacityPlan(500, 10, true).vus_per_node, 50);
+  assert.equal(capacityPlan(1000, 10, true).vus_per_node, 100);
+  assert.throws(() => capacityPlan(2000, 20, true), /1000/);
   assert.throws(() => capacityPlan(1000, 0));
   assert.throws(() => capacityPlan(123, 10));
 });
@@ -223,4 +225,14 @@ test('readiness reports require every concurrent generator, distinct exits and t
     rows[19].meta.generator_network.ip_fingerprint = rows[0].meta.generator_network.ip_fingerprint;write();assert.throws(check);
     fs.unlinkSync(path.join(directory, 'summaries', 'summary-node-20.json'));assert.throws(check);
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
+});
+
+test('peer classification identifies the TCP leg without exporting addresses', () => {
+  const ranges = JSON.parse(fs.readFileSync(new URL('./cloudflare-ipv4-ranges.json', import.meta.url)));
+  for (const ip of ['104.16.0.0', '104.23.255.255', '172.64.0.1', '173.245.48.1'])
+    assert.equal(diagnosticPeerClass(ip, '198.51.100.7', ranges), 'cloudflare');
+  assert.equal(diagnosticPeerClass('198.51.100.7', '198.51.100.7', ranges), 'configured_origin');
+  assert.equal(diagnosticPeerClass('104.15.255.255', '', ranges), 'other');
+  assert.equal(diagnosticPeerClass('256.1.1.1', '', ranges), 'unknown');
+  assert.equal(diagnosticPeerClass('private-capability-value', '', ranges), 'unknown');
 });
