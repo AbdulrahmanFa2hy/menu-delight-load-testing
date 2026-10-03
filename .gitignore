@@ -3,3 +3,6 @@ summary-node-*.json
 benchmark-result.json
 summaries/
 .env*
+__pycache__/
+diagnostics-node-*.json
+generator-samples-node-*.jsonl
