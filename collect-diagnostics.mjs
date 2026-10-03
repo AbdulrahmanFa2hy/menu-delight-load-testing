@@ -6,6 +6,19 @@ import {sanitizeDiagnostic} from './contracts.mjs';
 const node = Number(process.env.NODE_INDEX);
 if (!Number.isInteger(node) || node < 1 || node > 10) throw new Error('Invalid node identity');
 const pidFile = path.join(process.env.RUNNER_TEMP, 'generator-monitor.pid');
+const resetPidFile = path.join(process.env.RUNNER_TEMP, 'generator-resets.pid');
+if (fs.existsSync(resetPidFile)) {
+  const pid = fs.readFileSync(resetPidFile, 'utf8').trim();
+  if (/^\d+$/.test(pid) && fs.existsSync(`/proc/${pid}/cmdline`)) {
+    const args = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
+    if (args.includes('capture-generator-resets.py') && args.some(x => /(^|\/)python3$/.test(x)) &&
+      (/(^|\/)python3$/.test(args[0]) || args.some(x => /(^|\/)sudo$/.test(x)))) {
+      const {execFileSync} = await import('node:child_process');
+      execFileSync('sudo', ['-n', 'kill', '-TERM', pid], {stdio: 'pipe'});
+      for (let i = 0; i < 30 && fs.existsSync(`/proc/${pid}/cmdline`); i++) await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
+}
 if (fs.existsSync(pidFile)) {
   const pid = fs.readFileSync(pidFile, 'utf8').trim();
   if (/^\d+$/.test(pid) && fs.existsSync(`/proc/${pid}/cmdline`)) {

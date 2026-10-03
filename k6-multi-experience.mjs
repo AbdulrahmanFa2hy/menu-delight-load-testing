@@ -90,6 +90,10 @@ function observed(response, expectedDenial = false, context = null) {
     (transportCodes[code] ?? transportCodes[0]).add(1);
   }
   if (capture && (context || failed || response.status >= 500)) {
+    // Parse only a native TCP tuple. The raw error can contain a private URL.
+    const tcp = failed ? /read tcp [\d.]+:(\d+)->([\d.]+):443:/.exec(response.error ?? '') : null;
+    const peer = tcp?.[2] ?? response.remote_ip ?? '';
+    const peerFingerprint = /^\d{1,3}(\.\d{1,3}){3}$/.test(peer) ? crypto.sha256(__ENV.RUN_ID + '|' + peer, 'hex') : '';
     const url = response.request?.url ?? '';
     const service = context?.service ?? (url.startsWith(site + '/menu/') ? 'menu-page' :
       url.startsWith(site + '/api/public-menu/') ? 'public-menu' : url.startsWith(site + '/api/analytics/events') ? 'menu-analytics' :
@@ -99,6 +103,7 @@ function observed(response, expectedDenial = false, context = null) {
       status: String(response.status), error_code: String(response.error_code ?? 0),
       started_ms: String(context?.started ?? Date.now() - response.timings.duration), duration_ms: String(response.timings.duration),
       body_kind: diagnosticBodyKind(response.status, response.body), proto: response.proto ?? '',
+      peer_ip_fingerprint: peerFingerprint, client_port: tcp?.[1] ?? '',
       cf_ray: response.headers['Cf-Ray'] ?? response.headers['CF-Ray'] ?? ''});
   }
   // Never log response.error: it can contain a private capability URL.

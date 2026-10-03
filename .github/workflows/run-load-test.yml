@@ -64,7 +64,9 @@ jobs:
         with:
           node-version: '22'
       - name: Validate benchmark contracts
-        run: node --test contracts.test.mjs
+        run: |
+          node --test contracts.test.mjs
+          python3 -m unittest test_generator_resets.py
       - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
         with:
           k6-version: '1.3.0'
@@ -94,6 +96,13 @@ jobs:
         run: |
           python3 monitor-generator.py "$RUNNER_TEMP/generator-samples.jsonl" >"$RUNNER_TEMP/generator-monitor.log" 2>&1 &
           echo "$!" > "$RUNNER_TEMP/generator-monitor.pid"
+      - name: Start TCP reset metadata capture
+        if: inputs.diagnostic_capture
+        env:
+          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          sudo -n python3 capture-generator-resets.py "$RUNNER_TEMP/generator-resets.jsonl" "$RUN_ID" >"$RUNNER_TEMP/generator-resets-monitor.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/generator-resets.pid"
       - name: Run benchmark
         env:
           ANON_KEY: ${{ secrets.BENCHMARK_ANON_KEY }}
@@ -121,6 +130,9 @@ jobs:
           if [[ -f "$RUNNER_TEMP/generator-samples.jsonl" ]]; then
             cp -- "$RUNNER_TEMP/generator-samples.jsonl" "generator-samples-node-$NODE_INDEX.jsonl"
           fi
+          if [[ -f "$RUNNER_TEMP/generator-resets.jsonl" ]]; then
+            cp -- "$RUNNER_TEMP/generator-resets.jsonl" "generator-resets-node-$NODE_INDEX.jsonl"
+          fi
       - name: Upload metrics only
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
@@ -130,6 +142,7 @@ jobs:
             summary-node-${{ matrix.node }}.json
             diagnostics-node-${{ matrix.node }}.json
             generator-samples-node-${{ matrix.node }}.jsonl
+            generator-resets-node-${{ matrix.node }}.jsonl
           if-no-files-found: error
           retention-days: 7
       - name: Remove temporary credentials

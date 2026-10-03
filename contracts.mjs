@@ -47,6 +47,8 @@ export function sanitizeDiagnostic(tags, utc) {
   const result = {utc, run_id: tags.run_id, service: tags.service, request_id: uuid.test(tags.request_id) ? tags.request_id : null,
     status: Number(tags.status), error_code: Number(tags.error_code), started_ms: Number(tags.started_ms), duration_ms: Number(tags.duration_ms),
     body_kind: tags.body_kind, proto: ['HTTP/1.0', 'HTTP/1.1', 'HTTP/2.0'].includes(tags.proto) ? tags.proto : 'unknown',
+    peer_ip_fingerprint: /^[0-9a-f]{64}$/.test(tags.peer_ip_fingerprint ?? '') ? tags.peer_ip_fingerprint : null,
+    client_port: /^\d{1,5}$/.test(tags.client_port ?? '') && Number(tags.client_port) > 0 && Number(tags.client_port) <= 65535 ? Number(tags.client_port) : null,
     cf_ray: /^[0-9a-f]{16}-[A-Z]{3}$/.test(tags.cf_ray) ? tags.cf_ray : null};
   if (![result.status, result.error_code, result.started_ms, result.duration_ms].every(Number.isFinite) ||
     result.status < 0 || result.status > 599 || result.duration_ms < 0) throw new Error('Invalid diagnostic numeric value');
