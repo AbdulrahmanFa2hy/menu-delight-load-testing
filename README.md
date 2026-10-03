@@ -28,6 +28,28 @@ Generators enter a bounded readiness barrier. Each makes one read-only Actions j
 
 The successful workload contains the same 49 active menus as the previous baseline. A separate synthetic paused restaurant is listed in `paused-restaurants.json`; the earlier denial fixture was reactivated outside the benchmark and remains excluded from successful journeys. The paused menu is checked separately: menu reads must return 404 and public analytics must reject it with 400. It is excluded from successful visitor journeys. The workload uses the same browser User-Agent as the original visitor simulation; Cloudflare protection remains enabled.
 
+## Workers request budget
+
+The protected-asset route invokes a Cloudflare Worker even on an asset-cache hit. More generator IPs do not increase the account-wide [Workers Free daily allowance](https://developers.cloudflare.com/workers/platform/limits/#daily-requests), which is currently 100,000 requests and resets at midnight UTC. Backend-origin diagnostics still fetch assets through this Worker. Preserve the security-critical route's fail-closed mode; bypassing its capability check is not a capacity fix.
+
+Before **each** mixed or tracking dispatch, check account-wide Workers usage, reserve ordinary traffic and other projects, and provide `workers_request_budget` for this run plus `workers_budget_verified_at` as a current UTC timestamp (`YYYY-MM-DDTHH:mm:ssZ`). The default budget is zero, which stops asset workloads before generator jobs or fixture access. Missing, future, stale or previous-day verification fails; a run crossing midnight UTC must be dispatched after reset. The timestamp must be within the last 15 minutes when the planner runs. A queued workflow may need a fresh dispatch. The games-only mode exercises no protected assets and needs no asset-Worker allowance.
+
+This is an operator-verified reservation, not an automatic billing/quota lookup. No Cloudflare account credential is stored in the public workflow, no plan upgrade is made, and the workflow does not subtract usage from a shared account counter. Recheck and reduce the available budget before the next run; unrelated account traffic and random workload variation still consume allowance. The conservative estimate uses fastest think time, full ramp exposure, a finishing asset journey per VU, probe reserve and 25% headroom. The generated plan records the estimate and verification timestamp. The 11 workload SLOs are unchanged.
+
+| Mixed VUs / 300-second hold | Required reserved Worker requests |
+|---:|---:|
+| 100 | 4,353 |
+| 250 | 10,822 |
+| 500 | 21,603 |
+| 1,000 | 43,165 |
+| 2,000 | 86,290 |
+| 3,000 | 129,415 |
+| 5,000 | 215,665 |
+| 7,500 | 323,478 |
+| 10,000 | 431,290 |
+
+The larger stages need an allowance beyond the Free-plan daily ceiling as well as verified generators and a passing preceding stage. After a quota alert, stop dispatching and verify the reset/remaining allowance. An alert alone does not attribute a native runtime failure to Cloudflare.
+
 ## Credentials
 
 Fixture IDs are synthetic. Active bearer tokens are held individually in Actions secrets `TRACKING_TOKEN_1` through `TRACKING_TOKEN_10`, ordered like `tracking-experiences.json`. `BENCHMARK_ANON_KEY` is the public Supabase anonymous API key. Previously published fixture tokens have been revoked.

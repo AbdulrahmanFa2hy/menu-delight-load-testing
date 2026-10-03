@@ -38,6 +38,16 @@ on:
         required: true
         default: false
         type: boolean
+      workers_request_budget:
+        description: Available Workers requests reserved for this run after checking account usage (0 blocks asset workloads)
+        required: true
+        default: '0'
+        type: string
+      workers_budget_verified_at:
+        description: UTC verification time within the last 15 minutes, for example YYYY-MM-DDTHH:mm:ssZ
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -68,6 +78,10 @@ jobs:
           TOTAL_VUS: ${{ inputs.target_vus }}
           AVAILABLE_RUNNER_CAPACITY: ${{ vars.BENCHMARK_AVAILABLE_RUNNER_CAPACITY || '10' }}
           DIAGNOSTIC_CAPTURE: ${{ inputs.diagnostic_capture }}
+          DURATION_SECONDS: ${{ inputs.duration_seconds }}
+          WORKLOAD_MODE: ${{ inputs.workload_mode }}
+          WORKERS_REQUEST_BUDGET: ${{ inputs.workers_request_budget }}
+          WORKERS_BUDGET_VERIFIED_AT: ${{ inputs.workers_budget_verified_at }}
         run: |
           node --test contracts.test.mjs
           node capacity-plan.mjs
