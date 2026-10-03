@@ -107,6 +107,8 @@ function observed(response, expectedDenial = false, context = null) {
       started_ms: String(context?.started ?? Date.now() - response.timings.duration), duration_ms: String(response.timings.duration),
       body_kind: diagnosticBodyKind(response.status, response.body), proto: response.proto ?? '',
       peer_ip_fingerprint: peerFingerprint, client_port: tcp?.[1] ?? '',
+      ...Object.fromEntries(['blocked', 'connecting', 'tls_handshaking', 'sending', 'waiting', 'receiving']
+        .map(key => [`${key}_ms`, String(response.timings[key] ?? 0)])),
       cf_ray: response.headers['Cf-Ray'] ?? response.headers['CF-Ray'] ?? ''});
   }
   // Never log response.error: it can contain a private capability URL.

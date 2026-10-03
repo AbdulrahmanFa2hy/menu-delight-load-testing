@@ -50,6 +50,11 @@ export function sanitizeDiagnostic(tags, utc) {
     peer_ip_fingerprint: /^[0-9a-f]{64}$/.test(tags.peer_ip_fingerprint ?? '') ? tags.peer_ip_fingerprint : null,
     client_port: /^\d{1,5}$/.test(tags.client_port ?? '') && Number(tags.client_port) > 0 && Number(tags.client_port) <= 65535 ? Number(tags.client_port) : null,
     cf_ray: /^[0-9a-f]{16}-[A-Z]{3}$/.test(tags.cf_ray) ? tags.cf_ray : null};
+  for (const phase of ['blocked', 'connecting', 'tls_handshaking', 'sending', 'waiting', 'receiving']) {
+    const value = Number(tags[`${phase}_ms`] ?? 0);
+    if (!Number.isFinite(value) || value < 0) throw new Error('Invalid diagnostic phase timing');
+    result[`${phase}_ms`] = value;
+  }
   if (![result.status, result.error_code, result.started_ms, result.duration_ms].every(Number.isFinite) ||
     result.status < 0 || result.status > 599 || result.duration_ms < 0) throw new Error('Invalid diagnostic numeric value');
   return result;
