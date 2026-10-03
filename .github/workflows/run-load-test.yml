@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       target_vus:
-        description: Total virtual users across ten runners
+        description: Total virtual users (larger stages require verified runner capacity)
         required: true
         default: '100'
         type: choice
-        options: ['100', '250', '500', '1000', '2000']
+        options: ['100', '250', '500', '1000', '2000', '3000', '5000', '7500', '10000']
       duration_seconds:
         description: Hold duration in seconds
         required: true
@@ -46,16 +46,54 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  prepare-capacity:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      nodes: ${{ steps.plan.outputs.nodes }}
+      peak_vus: ${{ steps.plan.outputs.peak_vus }}
+      start_ms: ${{ steps.plan.outputs.start_ms }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+      - name: Validate capacity and plan generators
+        id: plan
+        env:
+          TOTAL_VUS: ${{ inputs.target_vus }}
+          AVAILABLE_RUNNER_CAPACITY: ${{ vars.BENCHMARK_AVAILABLE_RUNNER_CAPACITY || '10' }}
+          DIAGNOSTIC_CAPTURE: ${{ inputs.diagnostic_capture }}
+        run: |
+          node --test contracts.test.mjs
+          node capacity-plan.mjs
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: capacity-plan
+          path: capacity-plan.json
+          retention-days: 7
+
   distributed-load-test:
+    needs: prepare-capacity
     if: github.ref == 'refs/heads/main'
     name: Node ${{ matrix.node }}
     runs-on: ubuntu-latest
     timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: read
+    env:
+      PEAK_VUS: ${{ needs.prepare-capacity.outputs.peak_vus }}
+      EXPECTED_NODES: ${{ needs.prepare-capacity.outputs.nodes }}
+      RUN_START_MS: ${{ needs.prepare-capacity.outputs.start_ms }}
     strategy:
       fail-fast: false
-      max-parallel: 10
-      matrix:
-        node: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+      max-parallel: 100
+      matrix: ${{ fromJSON(needs.prepare-capacity.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -83,15 +121,14 @@ jobs:
           TRACKING_TOKEN_9: ${{ secrets.TRACKING_TOKEN_9 }}
           TRACKING_TOKEN_10: ${{ secrets.TRACKING_TOKEN_10 }}
         run: node prepare-fixtures.mjs
-      - name: Calculate node workload
-        env:
-          TOTAL_VUS: ${{ inputs.target_vus }}
-        run: |
-          node -e "const fs=require('fs');const n=Number(process.env.TOTAL_VUS);if(![100,250,500,1000,2000].includes(n))throw Error('Invalid workload');fs.appendFileSync(process.env.GITHUB_ENV,'PEAK_VUS='+n/10+'\n')"
       - name: Measure generator network
         env:
           RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: node generator-network.mjs
+      - name: Synchronize generators
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node synchronize-generators.mjs
       - name: Start generator resource capture
         run: |
           python3 monitor-generator.py "$RUNNER_TEMP/generator-samples.jsonl" >"$RUNNER_TEMP/generator-monitor.log" 2>&1 &
@@ -150,8 +187,8 @@ jobs:
         run: rm -f -- "$RUNNER_TEMP/benchmark-private-fixtures.json" "$RUNNER_TEMP/benchmark-private-metrics.json" "$RUNNER_TEMP/generator-network.json"
 
   aggregate-benchmark:
-    needs: distributed-load-test
-    if: always()
+    needs: [prepare-capacity, distributed-load-test]
+    if: always() && needs.prepare-capacity.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -167,6 +204,8 @@ jobs:
           path: summaries
           merge-multiple: true
       - name: Aggregate complete run and enforce thresholds
+        env:
+          EXPECTED_NODES: ${{ needs.prepare-capacity.outputs.nodes }}
         run: node aggregate.mjs
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: always()
