@@ -34,7 +34,7 @@ on:
         type: choice
         options: [keepalive, fresh_iteration]
       diagnostic_capture:
-        description: Capture sanitized correlation records (maximum 250 total VUs)
+        description: Capture sanitized correlation records (maximum 1000 total VUs)
         required: true
         default: false
         type: boolean

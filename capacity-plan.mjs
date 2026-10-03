@@ -10,7 +10,7 @@ export const publicEventsPerIpSecondBudget = 25;
 export function capacityPlan(total, available = 10, capture = false) {
   if (!capacityStages.includes(total) || !Number.isInteger(available) || available < 10 || available > 100)
     throw new Error('Invalid capacity configuration');
-  if (capture && total > 250) throw new Error('Full diagnostic capture is limited to 250 total VUs');
+  if (capture && total > 1000) throw new Error('Full diagnostic capture is limited to 1000 total VUs');
   const nodes = Math.max(10, Math.ceil(total / 100));
   if (nodes > available) throw new Error(`Need ${nodes} concurrent generators; verified capacity is ${available}. Configure BENCHMARK_AVAILABLE_RUNNER_CAPACITY only after verification.`);
   const vus = total / nodes;

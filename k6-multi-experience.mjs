@@ -3,10 +3,11 @@ import { sleep } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
 import crypto from 'k6/crypto';
 import execution from 'k6/execution';
-import { sessionAllowed, transportFailureKind, transportErrorCodes, workloadThresholds, diagnosticBodyKind } from './contracts.mjs';
+import { sessionAllowed, transportFailureKind, transportErrorCodes, workloadThresholds, diagnosticBodyKind, diagnosticPeerClass } from './contracts.mjs';
 
 const mapping = JSON.parse(open('./restaurant-items.json'));
 const pausedRestaurants = JSON.parse(open('./paused-restaurants.json'));
+const cloudflareRanges = JSON.parse(open('./cloudflare-ipv4-ranges.json'));
 const restaurants = Object.keys(mapping).filter(id => !pausedRestaurants.includes(id));
 const trackingExperiences = JSON.parse(open(__ENV.FIXTURE_FILE));
 const site = 'https://qr.gilgaamesh.com';
@@ -20,8 +21,12 @@ const mode = __ENV.WORKLOAD_MODE || 'mixed';
 const route = __ENV.BACKEND_ROUTE || 'cloudflare';
 const connections = __ENV.CONNECTIONS || 'keepalive';
 const capture = __ENV.DIAGNOSTIC_CAPTURE === 'true';
+const expectedNodes = Number(__ENV.EXPECTED_NODES || 10);
+if (!Number.isInteger(peak) || peak < 1 || peak > 100 || ![30, 60, 120, 300].includes(hold) ||
+  !Number.isInteger(expectedNodes) || expectedNodes < 10 || expectedNodes > 100 ||
+  !Number.isInteger(nodeIndex) || nodeIndex < 1 || nodeIndex > expectedNodes) throw new Error('Invalid bounded generator workload');
 if (!['cloudflare', 'backend_origin'].includes(route) || !['keepalive', 'fresh_iteration'].includes(connections) ||
-  (capture && peak > 25) || (route === 'backend_origin' && !/^\d{1,3}(\.\d{1,3}){3}$/.test(__ENV.ORIGIN_ADDRESS ?? '')))
+  (capture && peak * expectedNodes > 1000) || (route === 'backend_origin' && !/^\d{1,3}(\.\d{1,3}){3}$/.test(__ENV.ORIGIN_ADDRESS ?? '')))
   throw new Error('Invalid or unbounded diagnostic configuration');
 const headers = { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` };
 const gameKeys = ['tetris', 'breakout_arkanoid', 'snake', 'air_hockey'];
@@ -107,6 +112,7 @@ function observed(response, expectedDenial = false, context = null) {
       started_ms: String(context?.started ?? Date.now() - response.timings.duration), duration_ms: String(response.timings.duration),
       body_kind: diagnosticBodyKind(response.status, response.body), proto: response.proto ?? '',
       peer_ip_fingerprint: peerFingerprint, client_port: tcp?.[1] ?? '',
+      peer_class: diagnosticPeerClass(peer, __ENV.ORIGIN_ADDRESS, cloudflareRanges),
       ...Object.fromEntries(['blocked', 'connecting', 'tls_handshaking', 'sending', 'waiting', 'receiving']
         .map(key => [`${key}_ms`, String(response.timings[key] ?? 0)])),
       cf_ray: response.headers['Cf-Ray'] ?? response.headers['CF-Ray'] ?? ''});
