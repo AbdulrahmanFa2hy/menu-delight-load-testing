@@ -202,3 +202,22 @@ test('standard runs verify the k6 exit without uploading raw metric or setup dat
     assert.throws(() => execFileSync(process.execPath, [script], {cwd: directory, env: {...process.env, RUNNER_TEMP: directory, NODE_INDEX: '100'}, stdio: 'pipe'}));
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
 });
+
+test('readiness reports require every concurrent generator, distinct exits and timely starts', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'benchmark-readiness-'));
+  try {
+    fs.mkdirSync(path.join(directory, 'summaries'));
+    const rows = Array.from({length: 20}, (_, i) => ({meta: {node_index: i + 1, run_id: '123456789-1', generator_readiness_only: true,
+      scheduled_start_ms: 1791036000000, readiness_start_ms: 1791036000000 + i,
+      generator_network: {k6_verified: true, ip_fingerprint: 'a'.repeat(62) + i.toString(16).padStart(2, '0')}}}));
+    const write = () => rows.forEach((row, i) => fs.writeFileSync(path.join(directory, 'summaries', `summary-node-${i+1}.json`), JSON.stringify(row)));
+    const check = () => execFileSync(process.execPath, [fileURLToPath(new URL('./aggregate-readiness.mjs', import.meta.url))], {
+      cwd: directory, env: {...process.env, EXPECTED_NODES: '20'}, stdio: 'pipe'});
+    write();check();
+    assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'generator-readiness-result.json'))).server_capacity_tested, false);
+    rows[19].meta.readiness_start_ms += 60000;write();assert.throws(check);
+    rows[19].meta.readiness_start_ms -= 60000;
+    rows[19].meta.generator_network.ip_fingerprint = rows[0].meta.generator_network.ip_fingerprint;write();assert.throws(check);
+    fs.unlinkSync(path.join(directory, 'summaries', 'summary-node-20.json'));assert.throws(check);
+  } finally { fs.rmSync(directory, {recursive: true, force: true}); }
+});
