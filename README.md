@@ -4,7 +4,7 @@ Manually dispatched HTTP journey tests for the owner's menu, protected AR assets
 
 Start with 100 total virtual users and a 60-second hold. After a passing run, use a 300-second hold, then increase gradually while monitoring the VPS. Previous 5,000 and 10,000 VU runs failed and do not establish supported capacity. Every node and the aggregator must pass. Missing reports fail aggregation.
 
-The fixture set contains 49 active menus and one intentionally paused menu listed in `paused-restaurants.json`. The paused menu is checked separately: menu reads must return 404 and public analytics must reject it with 400. It is excluded from successful visitor journeys. The workload uses the same browser User-Agent as the original visitor simulation; Cloudflare protection remains enabled.
+The successful workload contains the same 49 active menus as the previous baseline. A separate synthetic paused restaurant is listed in `paused-restaurants.json`; the earlier denial fixture was reactivated outside the benchmark and remains excluded from successful journeys. The paused menu is checked separately: menu reads must return 404 and public analytics must reject it with 400. It is excluded from successful visitor journeys. The workload uses the same browser User-Agent as the original visitor simulation; Cloudflare protection remains enabled.
 
 ## Credentials
 
