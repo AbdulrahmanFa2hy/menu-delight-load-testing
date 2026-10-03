@@ -105,6 +105,9 @@ test('diagnostics reject unknown identities and never export URL, body or header
   assert.throws(() => sanitizeDiagnostic({...tags, service: secret}, result.utc));
   assert.throws(() => sanitizeDiagnostic({...tags, duration_ms: secret}, result.utc));
   assert.throws(() => sanitizeDiagnostic({...tags, run_id: secret}, result.utc));
+  assert.equal(sanitizeDiagnostic({...tags, tls_handshaking_ms: '15000'}, result.utc).tls_handshaking_ms, 15000);
+  assert.throws(() => sanitizeDiagnostic({...tags, waiting_ms: secret}, result.utc));
+  assert.throws(() => sanitizeDiagnostic({...tags, connecting_ms: '-1'}, result.utc));
   assert.equal(diagnosticBodyKind(503, ''), 'empty');
   assert.equal(diagnosticBodyKind(503, '{"error":"temporarily_unavailable"}'), 'json_unavailable');
   assert.equal(diagnosticBodyKind(0, secret), 'transport');
