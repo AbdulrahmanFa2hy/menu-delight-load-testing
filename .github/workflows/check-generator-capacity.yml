@@ -1,0 +1,108 @@
+name: Check Generator Capacity Without VPS Load
+on:
+  workflow_dispatch:
+    inputs:
+      generator_count:
+        description: Candidate concurrent generators; no fixture credentials or VPS traffic
+        required: true
+        default: '20'
+        type: choice
+        options: ['10', '20', '30', '50', '75', '100']
+permissions:
+  contents: read
+concurrency:
+  group: vps-benchmark
+  cancel-in-progress: false
+jobs:
+  prepare-readiness:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      nodes: ${{ steps.plan.outputs.nodes }}
+      start_ms: ${{ steps.plan.outputs.start_ms }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+      - name: Plan candidate generators
+        id: plan
+        env:
+          CANDIDATE_NODES: ${{ inputs.generator_count }}
+        run: |
+          node --input-type=module -e "import fs from 'node:fs';const n=Number(process.env.CANDIDATE_NODES);if(![10,20,30,50,75,100].includes(n))throw Error('Invalid candidate count');fs.appendFileSync(process.env.GITHUB_OUTPUT,'nodes='+n+'\nmatrix='+JSON.stringify({node:Array.from({length:n},(_,i)=>i+1)})+'\nstart_ms='+(Date.now()+120000)+'\n')"
+  generator-readiness:
+    needs: prepare-readiness
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      max-parallel: 100
+      matrix: ${{ fromJSON(needs.prepare-readiness.outputs.matrix) }}
+    env:
+      EXPECTED_NODES: ${{ needs.prepare-readiness.outputs.nodes }}
+      RUN_START_MS: ${{ needs.prepare-readiness.outputs.start_ms }}
+      RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      NODE_INDEX: ${{ matrix.node }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+      - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
+        with:
+          k6-version: '1.3.0'
+      - name: Measure generator network
+        run: node generator-network.mjs
+      - name: Synchronize generators
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node synchronize-generators.mjs
+      - name: Verify k6 exit and scheduled readiness
+        run: k6 run --quiet --log-output=none k6-generator-readiness.mjs
+      - name: Sanitize readiness record
+        if: always()
+        run: node collect-diagnostics.mjs
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: always()
+        with:
+          name: summary-node-${{ matrix.node }}
+          path: summary-node-${{ matrix.node }}.json
+          if-no-files-found: error
+          retention-days: 7
+  aggregate-readiness:
+    needs: [prepare-readiness, generator-readiness]
+    if: always() && needs.prepare-readiness.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: summary-node-*
+          path: summaries
+          merge-multiple: true
+      - name: Verify all candidate generators
+        env:
+          EXPECTED_NODES: ${{ needs.prepare-readiness.outputs.nodes }}
+        run: node aggregate-readiness.mjs
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: generator-readiness-result
+          path: generator-readiness-result.json
+          retention-days: 7

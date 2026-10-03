@@ -8,6 +8,8 @@ Start with 100 total virtual users and a 60-second hold. Repeat sustained 300-se
 
 The workflow permits all the stages above, with at least ten generators and at most 100 VUs per generator. `BENCHMARK_AVAILABLE_RUNNER_CAPACITY` is a repository variable, defaulting to the ten concurrent runners already demonstrated. Increase it only after verifying available concurrent jobs for the account, including other workflows. It does not provision runners or change an account limit. A plan requiring more generators stops before load. [GitHub's documented concurrency limits](https://docs.github.com/en/actions/reference/limits#job-concurrency-limits-for-github-hosted-runners) vary by plan; queued jobs cannot establish simultaneous capacity.
 
+`Check Generator Capacity Without VPS Load` verifies a candidate generator count with the same readiness barrier and curl/k6 exit probes. It reads no fixture secrets and sends no requests to the application or VPS. A passing report establishes concurrently ready generators with distinct outgoing IPs, not server capacity or guaranteed availability during another workflow. Check other account workloads before updating the capacity variable. An unsuccessful readiness check must not enable larger load stages.
+
 | Total VUs | Concurrent generators | VUs per generator | Minimum distinct exit IPs at reserved rate budget |
 |---|---:|---:|---:|
 | 100 | 10 | 10 | 1 |
