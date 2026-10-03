@@ -15,6 +15,29 @@ on:
         default: '60'
         type: choice
         options: ['30', '60', '120', '300']
+      workload_mode:
+        description: Mixed capacity workload or isolated diagnostic workload
+        required: true
+        default: mixed
+        type: choice
+        options: [mixed, tracking, games]
+      backend_route:
+        description: Normal public path or TLS-verified backend origin diagnostic
+        required: true
+        default: cloudflare
+        type: choice
+        options: [cloudflare, backend_origin]
+      connections:
+        description: Normal reuse or diagnostic fresh connection per iteration
+        required: true
+        default: keepalive
+        type: choice
+        options: [keepalive, fresh_iteration]
+      diagnostic_capture:
+        description: Capture sanitized correlation records (maximum 250 total VUs)
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -62,25 +85,56 @@ jobs:
         env:
           TOTAL_VUS: ${{ inputs.target_vus }}
         run: |
-          echo "PEAK_VUS=$(( TOTAL_VUS / 10 ))" >> "$GITHUB_ENV"
+          node -e "const fs=require('fs');const n=Number(process.env.TOTAL_VUS);if(![100,250,500,1000,2000].includes(n))throw Error('Invalid workload');fs.appendFileSync(process.env.GITHUB_ENV,'PEAK_VUS='+n/10+'\n')"
+      - name: Measure generator network
+        env:
+          RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: node generator-network.mjs
+      - name: Start generator resource capture
+        run: |
+          python3 monitor-generator.py "$RUNNER_TEMP/generator-samples.jsonl" >"$RUNNER_TEMP/generator-monitor.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/generator-monitor.pid"
       - name: Run benchmark
         env:
           ANON_KEY: ${{ secrets.BENCHMARK_ANON_KEY }}
           DURATION_SECONDS: ${{ inputs.duration_seconds }}
           NODE_INDEX: ${{ matrix.node }}
           RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: k6 run --quiet --log-output=none k6-multi-experience.mjs
+          WORKLOAD_MODE: ${{ inputs.workload_mode }}
+          BACKEND_ROUTE: ${{ inputs.backend_route }}
+          CONNECTIONS: ${{ inputs.connections }}
+          DIAGNOSTIC_CAPTURE: ${{ inputs.diagnostic_capture }}
+          ORIGIN_ADDRESS: ${{ secrets.BENCHMARK_ORIGIN_ADDRESS }}
+        run: |
+          umask 077
+          if [[ "$DIAGNOSTIC_CAPTURE" == true ]]; then
+            k6 run --quiet --log-output=none --out "json=$RUNNER_TEMP/benchmark-private-metrics.json" k6-multi-experience.mjs
+          else
+            k6 run --quiet --log-output=none k6-multi-experience.mjs
+          fi
+      - name: Stop resource capture and sanitize diagnostics
+        if: always()
+        env:
+          NODE_INDEX: ${{ matrix.node }}
+        run: |
+          node collect-diagnostics.mjs
+          if [[ -f "$RUNNER_TEMP/generator-samples.jsonl" ]]; then
+            cp -- "$RUNNER_TEMP/generator-samples.jsonl" "generator-samples-node-$NODE_INDEX.jsonl"
+          fi
       - name: Upload metrics only
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: summary-node-${{ matrix.node }}
-          path: summary-node-${{ matrix.node }}.json
+          path: |
+            summary-node-${{ matrix.node }}.json
+            diagnostics-node-${{ matrix.node }}.json
+            generator-samples-node-${{ matrix.node }}.jsonl
           if-no-files-found: error
           retention-days: 7
       - name: Remove temporary credentials
         if: always()
-        run: rm -f -- "$RUNNER_TEMP/benchmark-private-fixtures.json"
+        run: rm -f -- "$RUNNER_TEMP/benchmark-private-fixtures.json" "$RUNNER_TEMP/benchmark-private-metrics.json" "$RUNNER_TEMP/generator-network.json"
 
   aggregate-benchmark:
     needs: distributed-load-test
