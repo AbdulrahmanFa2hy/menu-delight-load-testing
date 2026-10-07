@@ -86,10 +86,11 @@ def main():
     assert hasattr(pycurl, 'PREREQFUNCTION') and pycurl.version_info()[4] & pycurl.VERSION_HTTP2
     args.output.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    deadline = time.monotonic() + 180
+    deadline = time.monotonic() + 300
     # Reverse case order across generators to reduce route/time confounding.
     cases = [('cloudflare', 'keepalive'), ('origin', 'fresh'),
-             ('cloudflare', 'fresh'), ('origin', 'keepalive')]
+             ('cloudflare', 'fresh'), ('origin', 'keepalive'),
+             ('cloudflare', 'idle_reuse'), ('origin', 'idle_reuse')]
     if node % 2 == 0:
         cases.reverse()
     counts = {'requests': 0, 'http_200': 0, 'transport_errors': 0,
@@ -99,7 +100,8 @@ def main():
             output.write(json.dumps(record, separators=(',', ':')) + '\n')
             output.flush()
         emit({'kind': 'probe_status', 'run_id': run, 'node': node,
-              'requests_per_case': args.requests_per_case, 'bounded_seconds': 180,
+              'requests_per_case': args.requests_per_case, 'idle_requests_per_case': 8,
+              'idle_gap_seconds': 6, 'bounded_seconds': 300,
               'tls_peer_verified': True, 'tls_hostname_verified': True,
               'redirects_followed': False, 'public_menu_get_only': True,
               'http2_negotiation': True,
@@ -128,13 +130,14 @@ def main():
             if route == 'origin':
                 curl.setopt(pycurl.RESOLVE, [HOST + ':443:' + str(origin)])
             try:
-                for sequence in range(args.requests_per_case):
+                count = 8 if connections == 'idle_reuse' else args.requests_per_case
+                for sequence in range(count):
                     if time.monotonic() + 8 > deadline:
                         raise RuntimeError('Diagnostic deadline reached')
                     record = {'kind': 'request', 'run_id': run, 'node': node,
                               'route': route, 'connections': connections,
                               'request_id': f'{run}-menu-{node}-{route}-{connections}-{sequence}',
-                              'started_epoch_seconds': time.time(), 'socket': None}
+                              'started_epoch_seconds': time.time(), 'socket': None, 'socket_attempts': []}
                     bytes_received = 0
                     def discard(data):
                         nonlocal bytes_received
@@ -147,6 +150,7 @@ def main():
                             'peer_port': peer_port, 'client_port': local_port,
                             'ready_epoch_seconds': time.time(),
                             'configured_origin': ipaddress.ip_address(peer) == origin}
+                        record['socket_attempts'].append(record['socket'])
                         return 0
                     curl.setopt(pycurl.WRITEFUNCTION, discard)
                     curl.setopt(pycurl.PREREQFUNCTION, socket_ready)
@@ -172,11 +176,12 @@ def main():
                         assert record['socket']['peer_port'] == 443
                         assert record['socket']['configured_origin'] == (route == 'origin')
                     emit(record)
-                    time.sleep(.25)
+                    if sequence + 1 < count:
+                        time.sleep(6 if connections == 'idle_reuse' else .25)
             finally:
                 curl.close()
         emit({'kind': 'probe_final', **counts,
-              'complete': counts['requests'] == 4 * args.requests_per_case})
+              'complete': counts['requests'] == 4 * args.requests_per_case + 16})
 
 
 if __name__ == '__main__':

@@ -26,6 +26,13 @@ class SocketCorrelationTests(unittest.TestCase):
     def test_early_handshake_failure_has_no_socket_join(self):
         self.assertEqual(transport.matching_resets({'socket': None}, [{'kind': 'tcp_reset'}]), [])
 
+    def test_reconnect_retains_reset_on_the_first_socket(self):
+        old = {'peer_ip_fingerprint': 'a', 'client_port': 12345, 'ready_epoch_seconds': 10}
+        new = {**old, 'client_port': 23456, 'ready_epoch_seconds': 10.7}
+        request = {'socket': new, 'socket_attempts': [old, new], 'ended_epoch_seconds': 11}
+        reset = {'kind': 'tcp_reset', 'peer_ip_fingerprint': 'a', 'client_port': 12345, 'epoch_seconds': 10.5}
+        self.assertEqual(transport.matching_resets(request, [reset]), [reset])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -21,11 +21,18 @@ Proxies are explicitly disabled; IPv4 is forced and each generator's actual
 Cloudflare-reflected exit is hashed using the run ID. Local socket fingerprints
 do not claim to reflect a public NAT address on the origin path.
 
+The extended sample also makes eight requests per route with six-second idle
+gaps: 160 additional HTML GETs across ten generators, 2,160 in total. Every
+socket callback is retained, including reconnects within a successful curl GET.
+The request deadline stays eight seconds and the entire client is bounded to
+300 seconds. Libcurl may recover an idempotent GET internally; new-connection
+counts and callback attempts expose that behavior where callbacks occur.
+
 Pycurl 7.48.0 binary wheels are pinned by hashes from its official PyPI release.
 The probe requires its prerequisite callback and HTTP/2 support. Bodies, raw
 addresses, URLs and raw curl errors are never exported. Captured reset metadata
 uses the existing bounded header-only collector. The aggregate requires all ten
-complete captures, 2,000 unique request records and ten distinct observed IPv4
+complete captures, 2,160 unique request records and ten distinct observed IPv4
 exits. It retains transport/HTTP failures rather than hiding them behind retries.
 
 An observed received reset identifies the TCP peer that delivered it. It does
@@ -37,4 +44,5 @@ client is not identical to the historical k6 client.
 Run the pure correlation checks with `python3 -m unittest test_menu_transport.py`.
 For a local smoke check, set `RUN_ID`, `NODE_INDEX` and `ORIGIN_ADDRESS`, install
 the pinned client, and run `probe-menu-transport.py OUTPUT --requests-per-case 5`.
-The smoke sample has 20 requests and cannot pass the ten-node aggregate.
+The extended smoke sample has 36 requests, including the idle cases, and cannot
+pass the ten-node aggregate. The original version's smoke sample had 20.
