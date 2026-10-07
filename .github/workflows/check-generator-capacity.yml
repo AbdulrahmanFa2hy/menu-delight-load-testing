@@ -106,3 +106,84 @@ jobs:
           name: generator-readiness-result
           path: generator-readiness-result.json
           retention-days: 7
+
+  menu-transport:
+    if: github.repository == 'AbdulrahmanFa2hy/menu-delight-load-testing' && github.ref == 'refs/heads/codex/frontend-socket-diagnostics'
+    name: Transport node ${{ matrix.node }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        node: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    env:
+      RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      NODE_INDEX: ${{ matrix.node }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install pinned diagnostic client
+        run: |
+          python3 -m venv "$RUNNER_TEMP/transport-venv"
+          "$RUNNER_TEMP/transport-venv/bin/python" -m pip install --disable-pip-version-check --only-binary=:all: --require-hashes -r requirements-transport.txt
+      - name: Start TCP reset metadata capture
+        run: |
+          umask 077
+          sudo -n python3 capture-generator-resets.py "$RUNNER_TEMP/generator-resets.jsonl" "$RUN_ID" >"$RUNNER_TEMP/generator-resets-monitor.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/generator-resets.pid"
+      - name: Verify outgoing address and probe menu sockets
+        env:
+          ORIGIN_ADDRESS: ${{ secrets.BENCHMARK_ORIGIN_ADDRESS }}
+        run: |
+          umask 077
+          "$RUNNER_TEMP/transport-venv/bin/python" probe-menu-transport.py "$RUNNER_TEMP/menu-transport.jsonl"
+      - name: Stop capture and export safe records
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/generator-resets.pid" ]]; then
+            sudo -n kill -TERM "$(cat "$RUNNER_TEMP/generator-resets.pid")" || true
+            for attempt in {1..30}; do
+              if ! sudo -n kill -0 "$(cat "$RUNNER_TEMP/generator-resets.pid")" 2>/dev/null; then break; fi
+              sleep 0.1
+            done
+          fi
+          mkdir -p safe-transport
+          for source in menu-transport generator-resets; do
+            if [[ -f "$RUNNER_TEMP/$source.jsonl" ]]; then
+              sudo -n cp -- "$RUNNER_TEMP/$source.jsonl" "safe-transport/$source-node-$NODE_INDEX.jsonl"
+              sudo -n chown "$(id -u):$(id -g)" "safe-transport/$source-node-$NODE_INDEX.jsonl"
+            fi
+          done
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: always()
+        with:
+          name: menu-transport-node-${{ matrix.node }}
+          path: safe-transport/*.jsonl
+          if-no-files-found: error
+          retention-days: 7
+  aggregate-transport:
+    needs: menu-transport
+    if: always() && github.repository == 'AbdulrahmanFa2hy/menu-delight-load-testing' && github.ref == 'refs/heads/codex/frontend-socket-diagnostics'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: menu-transport-node-*
+          path: safe-transport
+          merge-multiple: true
+      - name: Verify coverage, exits and exact socket joins
+        run: |
+          python3 -m unittest test_menu_transport.py
+          python3 analyze-menu-transport.py safe-transport menu-transport-result.json
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: menu-transport-result
+          path: menu-transport-result.json
+          if-no-files-found: error
+          retention-days: 7

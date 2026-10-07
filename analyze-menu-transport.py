@@ -1,0 +1,92 @@
+"""Join a request to observed resets by exact socket and its live time window."""
+import argparse
+import collections
+import json
+import math
+from pathlib import Path
+
+
+def matching_resets(request, resets):
+    socket = request.get('socket')
+    if not socket:
+        return []
+    return [reset for reset in resets
+            if reset.get('kind') == 'tcp_reset'
+            and reset['peer_ip_fingerprint'] == socket['peer_ip_fingerprint']
+            and reset['client_port'] == socket['client_port']
+            and socket['ready_epoch_seconds'] <= reset['epoch_seconds'] <= request['ended_epoch_seconds']]
+
+
+def analyze(directory, expected_nodes):
+    cases = collections.defaultdict(collections.Counter)
+    matches = []
+    node_records = []
+    exits = []
+    latencies = collections.defaultdict(list)
+    run_ids = set()
+    for node in range(1, expected_nodes + 1):
+        def read(name):
+            return [json.loads(line) for line in (directory / f'{name}-node-{node}.jsonl').read_text().splitlines()]
+        rows = read('menu-transport')
+        resets = read('generator-resets')
+        status = [row for row in rows if row['kind'] == 'probe_status']
+        networks = [row for row in rows if row['kind'] == 'generator_network']
+        finals = [row for row in rows if row['kind'] == 'probe_final']
+        capture_status = [row for row in resets if row['kind'] == 'capture_status']
+        capture_final = [row for row in resets if row['kind'] == 'capture_final']
+        assert len(status) == len(networks) == len(finals) == len(capture_status) == len(capture_final) == 1
+        assert status[0]['node'] == node and status[0]['requests_per_case'] == 50
+        assert status[0]['tls_peer_verified'] and status[0]['tls_hostname_verified']
+        assert finals[0]['complete'] and finals[0]['requests'] == 200
+        assert capture_status[0]['available'] and capture_final[0]['omitted_records'] == 0
+        assert capture_final[0]['exit_code'] in (0, -15, 143)
+        assert capture_final[0]['reset_records'] == sum(row['kind'] == 'tcp_reset' for row in resets)
+        requests = [row for row in rows if row['kind'] == 'request']
+        assert len(requests) == len({row['request_id'] for row in requests}) == 200
+        assert all(row['node'] == node and row['run_id'] == status[0]['run_id'] for row in requests)
+        exits.append(networks[0]['ip_fingerprint'])
+        run_ids.add(status[0]['run_id'])
+        for request in requests:
+            key = request['route'] + '/' + request['connections']
+            assert request['route'] in ('cloudflare', 'origin') and request['connections'] in ('keepalive', 'fresh')
+            if request['socket']:
+                assert request['socket']['configured_origin'] == (request['route'] == 'origin')
+            case = cases[key]
+            latencies[key].append(request['elapsed_ms'])
+            case['requests'] += 1
+            case['http_200'] += int(request['http_status'] == 200 and not request['curl_error_code'])
+            case['transport_errors'] += int(bool(request['curl_error_code']))
+            case['http_errors'] += int(not request['curl_error_code'] and request['http_status'] != 200)
+            case['unknown_socket'] += int(request['socket'] is None)
+            case['new_connections'] += request['new_connections']
+            case['http_version_' + str(request['negotiated_http_version'])] += 1
+            joined = matching_resets(request, resets)
+            if joined:
+                case['requests_with_socket_reset'] += 1
+                matches.append({'request_id': request['request_id'], 'node': node, 'case': key,
+                                'curl_error_code': request['curl_error_code'],
+                                'http_status': request['http_status'], 'resets': joined})
+        node_records.append({'node': node, 'network': networks[0], 'final': finals[0],
+                             'reset_capture_final': capture_final[0]})
+    assert len(run_ids) == 1, 'Mixed diagnostic runs cannot be aggregated'
+    assert len(set(exits)) == expected_nodes, 'Generators did not use distinct verified IPv4 exits'
+    assert len(cases) == 4 and all(case['requests'] == expected_nodes * 50 for case in cases.values())
+    timings = {key: {'mean': sum(values) / len(values),
+                      'p95': sorted(values)[math.ceil(.95 * len(values)) - 1], 'max': max(values)}
+               for key, values in latencies.items()}
+    return {'complete': True, 'run_id': next(iter(run_ids)), 'verified_distinct_ipv4_exits': len(set(exits)),
+            'cases': dict(cases), 'elapsed_ms': timings, 'request_socket_reset_matches': matches, 'nodes': node_records,
+            'limits': 'No reset in this bounded sample does not establish its underlying cause. '
+                      'A socket match identifies the observed peer and timing, not the initiator behind that peer. '
+                      'Failures before the prerequisite callback have unknown sockets.'}
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('directory', type=Path)
+    parser.add_argument('output', type=Path)
+    args = parser.parse_args()
+    result = analyze(args.directory, 10)
+    args.output.write_text(json.dumps(result, indent=2))
+    print(json.dumps({'complete': result['complete'], 'distinct_exits': result['verified_distinct_ipv4_exits'],
+                      'cases': result['cases'], 'reset_matches': len(result['request_socket_reset_matches'])}))
