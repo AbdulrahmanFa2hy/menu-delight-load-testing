@@ -25,6 +25,7 @@ def analyze(directory, expected_nodes):
     exits = []
     latencies = collections.defaultdict(list)
     run_ids = set()
+    surfaces = set()
     for node in range(1, expected_nodes + 1):
         def read(name):
             return [json.loads(line) for line in (directory / f'{name}-node-{node}.jsonl').read_text().splitlines()]
@@ -39,6 +40,11 @@ def analyze(directory, expected_nodes):
         assert status[0]['node'] == node and status[0]['requests_per_case'] == 50
         assert status[0]['tls_peer_verified'] and status[0]['tls_hostname_verified']
         idle = status[0].get('idle_requests_per_case', 0)
+        surface = status[0].get('surface', 'frontend')
+        assert surface in ('frontend', 'backend_denial')
+        expected_status = 200 if surface == 'frontend' else 401
+        assert status[0].get('expected_http_status', 200) == expected_status
+        surfaces.add(surface)
         assert idle in (0, 8)
         expected_requests = 200 + 2 * idle
         assert finals[0]['complete'] and finals[0]['requests'] == expected_requests
@@ -59,8 +65,10 @@ def analyze(directory, expected_nodes):
             latencies[key].append(request['elapsed_ms'])
             case['requests'] += 1
             case['http_200'] += int(request['http_status'] == 200 and not request['curl_error_code'])
+            if surface == 'backend_denial':
+                case['http_401'] += int(request['http_status'] == 401 and not request['curl_error_code'])
             case['transport_errors'] += int(bool(request['curl_error_code']))
-            case['http_errors'] += int(not request['curl_error_code'] and request['http_status'] != 200)
+            case['http_errors'] += int(not request['curl_error_code'] and request['http_status'] != expected_status)
             case['unknown_socket'] += int(request['socket'] is None)
             case['new_connections'] += request['new_connections']
             case['requests_with_multiple_socket_callbacks'] += int(len(request.get('socket_attempts', [])) > 1)
@@ -74,6 +82,7 @@ def analyze(directory, expected_nodes):
         node_records.append({'node': node, 'network': networks[0], 'final': finals[0],
                              'reset_capture_final': capture_final[0]})
     assert len(run_ids) == 1, 'Mixed diagnostic runs cannot be aggregated'
+    assert len(surfaces) == 1
     assert len(set(exits)) == expected_nodes, 'Generators did not use distinct verified IPv4 exits'
     assert len(cases) in (4, 6)
     assert all(case['requests'] == expected_nodes * (8 if key.endswith('/idle_reuse') else 50)
@@ -81,7 +90,7 @@ def analyze(directory, expected_nodes):
     timings = {key: {'mean': sum(values) / len(values),
                       'p95': sorted(values)[math.ceil(.95 * len(values)) - 1], 'max': max(values)}
                for key, values in latencies.items()}
-    return {'complete': True, 'run_id': next(iter(run_ids)), 'verified_distinct_ipv4_exits': len(set(exits)),
+    return {'complete': True, 'surface': next(iter(surfaces)), 'run_id': next(iter(run_ids)), 'verified_distinct_ipv4_exits': len(set(exits)),
             'cases': dict(cases), 'elapsed_ms': timings, 'request_socket_reset_matches': matches, 'nodes': node_records,
             'limits': 'No reset in this bounded sample does not establish its underlying cause. '
                       'A socket match identifies the observed peer and timing, not the initiator behind that peer. '

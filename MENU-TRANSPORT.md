@@ -28,6 +28,18 @@ The request deadline stays eight seconds and the entire client is bounded to
 300 seconds. Libcurl may recover an idempotent GET internally; new-connection
 counts and callback attempts expose that behavior where callbacks occur.
 
+The `diagnostic_surface` input also supports `backend_denial` on the same
+restricted branch. It compares the exact Supabase hostname used by k6. Requests
+POST `{}` to `admin-create-owner` with the existing publishable anonymous API
+key in the same apikey/Authorization headers as k6. The client checks the JWT's
+role is `anon` before sending anything, and this protected endpoint denies that
+caller before any application write. Both TLS-verified public/origin smoke
+requests returned 401. The client stops immediately if a completed request
+returns any other HTTP status. This is a socket diagnostic, not an admission or
+capacity pass. No private tracking capability is used, and no body, header key
+or raw URL is exported. The input defaults to frontend; main readiness behavior
+is unchanged.
+
 Pycurl 7.48.0 binary wheels are pinned by hashes from its official PyPI release.
 The probe requires its prerequisite callback and HTTP/2 support. Bodies, raw
 addresses, URLs and raw curl errors are never exported. Captured reset metadata

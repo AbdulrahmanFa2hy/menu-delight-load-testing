@@ -1,17 +1,22 @@
 """Bounded GET diagnostics; export socket metadata, never bodies/raw addresses."""
 import argparse
+import base64
 import hashlib
 import ipaddress
 import json
 import os
 import re
 import time
+import uuid
 from pathlib import Path
 
 import pycurl
 
-HOST = 'qr.gilgaamesh.com'
 MENU = '0e72058e-b4c9-4c43-98a8-315b8f94cc15'
+SURFACES = {
+    'frontend': ('qr.gilgaamesh.com', '/menu/' + MENU, 200),
+    'backend_denial': ('supabase.gilgaamesh.com', '/functions/v1/admin-create-owner', 401),
+}
 
 
 def fingerprint(run, address):
@@ -77,7 +82,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path)
     parser.add_argument('--requests-per-case', type=int, default=50, choices=(5, 50))
+    parser.add_argument('--surface', choices=tuple(SURFACES), default='frontend')
     args = parser.parse_args()
+    host, path, expected_status = SURFACES[args.surface]
+    anon_key = None
+    if args.surface == 'backend_denial':
+        anon_key = os.environ['ANON_KEY']
+        assert re.fullmatch(r'[A-Za-z0-9._-]{30,8192}', anon_key)
+        claim = anon_key.split('.')[1]
+        claims = json.loads(base64.urlsafe_b64decode(claim + '=' * (-len(claim) % 4)))
+        assert claims.get('role') == 'anon', 'Only the publishable anonymous caller is allowed'
     run = os.environ['RUN_ID']
     node = int(os.environ['NODE_INDEX'])
     assert re.fullmatch(r'\d{1,20}-\d{1,3}', run) and 1 <= node <= 10
@@ -93,7 +107,7 @@ def main():
              ('cloudflare', 'idle_reuse'), ('origin', 'idle_reuse')]
     if node % 2 == 0:
         cases.reverse()
-    counts = {'requests': 0, 'http_200': 0, 'transport_errors': 0,
+    counts = {'requests': 0, 'http_200': 0, 'expected_http': 0, 'transport_errors': 0,
               'http_errors': 0, 'unknown_socket': 0}
     with os.fdopen(os.open(args.output, flags, 0o600), 'w', encoding='utf-8') as output:
         def emit(record):
@@ -101,9 +115,11 @@ def main():
             output.flush()
         emit({'kind': 'probe_status', 'run_id': run, 'node': node,
               'requests_per_case': args.requests_per_case, 'idle_requests_per_case': 8,
+              'surface': args.surface, 'expected_http_status': expected_status,
               'idle_gap_seconds': 6, 'bounded_seconds': 300,
               'tls_peer_verified': True, 'tls_hostname_verified': True,
-              'redirects_followed': False, 'public_menu_get_only': True,
+              'redirects_followed': False, 'public_menu_get_only': args.surface == 'frontend',
+              'authorization_denial_only': args.surface == 'backend_denial',
               'http2_negotiation': True,
               'proxy_environment_present': any(os.getenv(k) for k in
                     ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy')),
@@ -113,7 +129,7 @@ def main():
         # Separate handles prevent an origin override from reusing a CDN socket.
         for route, connections in cases:
             curl = pycurl.Curl()
-            curl.setopt(pycurl.URL, 'https://' + HOST + '/menu/' + MENU)
+            curl.setopt(pycurl.URL, 'https://' + host + path)
             curl.setopt(pycurl.IPRESOLVE, pycurl.IPRESOLVE_V4)
             curl.setopt(pycurl.PROXY, '')
             curl.setopt(pycurl.SSL_VERIFYPEER, 1)
@@ -128,7 +144,10 @@ def main():
             curl.setopt(pycurl.FRESH_CONNECT, connections == 'fresh')
             curl.setopt(pycurl.FORBID_REUSE, connections == 'fresh')
             if route == 'origin':
-                curl.setopt(pycurl.RESOLVE, [HOST + ':443:' + str(origin)])
+                curl.setopt(pycurl.RESOLVE, [host + ':443:' + str(origin)])
+            if args.surface == 'backend_denial':
+                # This protected endpoint rejects the invalid caller before any write.
+                curl.setopt(pycurl.POSTFIELDS, '{}')
             try:
                 count = 8 if connections == 'idle_reuse' else args.requests_per_case
                 for sequence in range(count):
@@ -136,7 +155,7 @@ def main():
                         raise RuntimeError('Diagnostic deadline reached')
                     record = {'kind': 'request', 'run_id': run, 'node': node,
                               'route': route, 'connections': connections,
-                              'request_id': f'{run}-menu-{node}-{route}-{connections}-{sequence}',
+                              'request_id': str(uuid.uuid4()),
                               'started_epoch_seconds': time.time(), 'socket': None, 'socket_attempts': []}
                     bytes_received = 0
                     def discard(data):
@@ -154,7 +173,10 @@ def main():
                         return 0
                     curl.setopt(pycurl.WRITEFUNCTION, discard)
                     curl.setopt(pycurl.PREREQFUNCTION, socket_ready)
-                    curl.setopt(pycurl.HTTPHEADER, ['X-Benchmark-Request-Id: ' + record['request_id']])
+                    headers = ['X-Menu-Benchmark-Id: ' + record['request_id'], 'X-Menu-Benchmark-Run: ' + run]
+                    if args.surface == 'backend_denial':
+                        headers += ['Authorization: Bearer ' + anon_key, 'apikey: ' + anon_key, 'Content-Type: application/json']
+                    curl.setopt(pycurl.HTTPHEADER, headers)
                     code = 0
                     try:
                         curl.perform()
@@ -169,13 +191,16 @@ def main():
                                    'elapsed_ms': 1000 * curl.getinfo(pycurl.TOTAL_TIME)})
                     counts['requests'] += 1
                     counts['http_200'] += int(not code and record['http_status'] == 200)
+                    counts['expected_http'] += int(not code and record['http_status'] == expected_status)
                     counts['transport_errors'] += int(bool(code))
-                    counts['http_errors'] += int(not code and record['http_status'] != 200)
+                    counts['http_errors'] += int(not code and record['http_status'] != expected_status)
                     counts['unknown_socket'] += int(record['socket'] is None)
                     if record['socket']:
                         assert record['socket']['peer_port'] == 443
                         assert record['socket']['configured_origin'] == (route == 'origin')
                     emit(record)
+                    if args.surface == 'backend_denial' and not code and record['http_status'] != 401:
+                        raise RuntimeError('Protected denial changed; stop further probes')
                     if sequence + 1 < count:
                         time.sleep(6 if connections == 'idle_reuse' else .25)
             finally:

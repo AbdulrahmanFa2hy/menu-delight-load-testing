@@ -8,6 +8,12 @@ on:
         default: '20'
         type: choice
         options: ['10', '20', '30', '50', '75', '100']
+      diagnostic_surface:
+        description: Diagnostic branch only; menu HTML or protected backend authorization denial
+        type: choice
+        required: true
+        default: frontend
+        options: [frontend, backend_denial]
 permissions:
   contents: read
 concurrency:
@@ -120,6 +126,7 @@ jobs:
     env:
       RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       NODE_INDEX: ${{ matrix.node }}
+      DIAGNOSTIC_SURFACE: ${{ inputs.diagnostic_surface || 'frontend' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -136,9 +143,10 @@ jobs:
       - name: Verify outgoing address and probe menu sockets
         env:
           ORIGIN_ADDRESS: ${{ secrets.BENCHMARK_ORIGIN_ADDRESS }}
+          ANON_KEY: ${{ secrets.BENCHMARK_ANON_KEY }}
         run: |
           umask 077
-          "$RUNNER_TEMP/transport-venv/bin/python" probe-menu-transport.py "$RUNNER_TEMP/menu-transport.jsonl"
+          "$RUNNER_TEMP/transport-venv/bin/python" probe-menu-transport.py "$RUNNER_TEMP/menu-transport.jsonl" --surface "$DIAGNOSTIC_SURFACE"
       - name: Stop capture and export safe records
         if: always()
         run: |
