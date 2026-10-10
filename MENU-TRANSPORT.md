@@ -49,9 +49,16 @@ exits. It retains transport/HTTP failures rather than hiding them behind retries
 
 An observed received reset identifies the TCP peer that delivered it. It does
 not establish which component behind that peer caused it. Failures before TLS
-and the prerequisite callback have unknown request sockets. A sample without a
-reset cannot explain the earlier intermittent failure, and this Python/libcurl
-client is not identical to the historical k6 client.
+and the prerequisite callback have no HTTP-ready socket. The updated client
+also records a connection socket's ephemeral port before connect/TLS, plus DNS,
+connect and TLS timings. It binds to the IPv4 wildcard with an OS-selected port;
+it does not select a fixed interface or source address. These allocation records
+allow an early reset to join by peer/port/time without claiming the connection
+or TLS handshake completed. Workflow probes wait 30 seconds before their bounded
+300-second request window, allowing an independently controlled origin metadata
+collector to start; local smoke probes default to no delay. A sample without a reset cannot explain the earlier
+intermittent failure, and this Python/libcurl client is not identical to the
+historical k6 client.
 
 Run the pure correlation checks with `python3 -m unittest test_menu_transport.py`.
 For a local smoke check, set `RUN_ID`, `NODE_INDEX` and `ORIGIN_ADDRESS`, install

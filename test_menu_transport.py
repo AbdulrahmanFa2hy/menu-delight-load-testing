@@ -33,6 +33,15 @@ class SocketCorrelationTests(unittest.TestCase):
         reset = {'kind': 'tcp_reset', 'peer_ip_fingerprint': 'a', 'client_port': 12345, 'epoch_seconds': 10.5}
         self.assertEqual(transport.matching_resets(request, [reset]), [reset])
 
+    def test_pre_tls_reset_matches_allocated_socket_without_http_ready_callback(self):
+        allocation = {'peer_ip_fingerprint': 'a', 'client_port': 12345, 'allocated_epoch_seconds': 10}
+        request = {'socket': None, 'connect_socket_attempts': [allocation], 'ended_epoch_seconds': 11}
+        reset = {'kind': 'tcp_reset', 'peer_ip_fingerprint': 'a', 'client_port': 12345, 'epoch_seconds': 10.5}
+        self.assertEqual(transport.matching_resets(request, [reset]), [reset])
+        self.assertEqual(transport.matching_resets(request, [{**reset, 'client_port': 23456}]), [])
+        self.assertEqual(transport.matching_resets(request, [{**reset, 'epoch_seconds': 9.99}]), [])
+        self.assertEqual(transport.matching_resets(request, [{**reset, 'epoch_seconds': 11.01}]), [])
+
 
 if __name__ == '__main__':
     unittest.main()

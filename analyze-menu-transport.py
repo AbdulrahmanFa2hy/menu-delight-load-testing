@@ -7,14 +7,16 @@ from pathlib import Path
 
 
 def matching_resets(request, resets):
-    sockets = request.get('socket_attempts') or ([request['socket']] if request.get('socket') else [])
+    sockets = list(request.get('socket_attempts') or ([request['socket']] if request.get('socket') else []))
+    sockets += request.get('connect_socket_attempts', [])
     if not sockets:
         return []
     return [reset for reset in resets
             if reset.get('kind') == 'tcp_reset'
             and any(reset['peer_ip_fingerprint'] == socket['peer_ip_fingerprint']
                     and reset['client_port'] == socket['client_port']
-                    and socket['ready_epoch_seconds'] <= reset['epoch_seconds'] <= request['ended_epoch_seconds']
+                    and socket.get('ready_epoch_seconds', socket.get('allocated_epoch_seconds'))
+                        <= reset['epoch_seconds'] <= request['ended_epoch_seconds']
                     for socket in sockets)]
 
 
@@ -70,6 +72,7 @@ def analyze(directory, expected_nodes):
             case['transport_errors'] += int(bool(request['curl_error_code']))
             case['http_errors'] += int(not request['curl_error_code'] and request['http_status'] != expected_status)
             case['unknown_socket'] += int(request['socket'] is None)
+            case['unknown_connection_socket'] += int(not request.get('connect_socket_attempts') and request['socket'] is None)
             case['new_connections'] += request['new_connections']
             case['requests_with_multiple_socket_callbacks'] += int(len(request.get('socket_attempts', [])) > 1)
             case['http_version_' + str(request['negotiated_http_version'])] += 1
@@ -94,7 +97,8 @@ def analyze(directory, expected_nodes):
             'cases': dict(cases), 'elapsed_ms': timings, 'request_socket_reset_matches': matches, 'nodes': node_records,
             'limits': 'No reset in this bounded sample does not establish its underlying cause. '
                       'A socket match identifies the observed peer and timing, not the initiator behind that peer. '
-                      'Failures before the prerequisite callback have unknown sockets.'}
+                      'The prerequisite callback marks HTTP-ready sockets; allocation metadata '
+                      'can identify earlier connection attempts but does not prove a TLS handshake completed.'}
 
 
 if __name__ == '__main__':

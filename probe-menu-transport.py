@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 import re
+import socket
 import time
 import uuid
 from pathlib import Path
@@ -83,6 +84,7 @@ def main():
     parser.add_argument('output', type=Path)
     parser.add_argument('--requests-per-case', type=int, default=50, choices=(5, 50))
     parser.add_argument('--surface', choices=tuple(SURFACES), default='frontend')
+    parser.add_argument('--start-delay-seconds', type=int, choices=(0, 30), default=0)
     args = parser.parse_args()
     host, path, expected_status = SURFACES[args.surface]
     anon_key = None
@@ -97,9 +99,12 @@ def main():
     assert re.fullmatch(r'\d{1,20}-\d{1,3}', run) and 1 <= node <= 10
     origin = ipaddress.ip_address(os.environ['ORIGIN_ADDRESS'])
     assert origin.version == 4 and origin.is_global
-    assert hasattr(pycurl, 'PREREQFUNCTION') and pycurl.version_info()[4] & pycurl.VERSION_HTTP2
+    assert hasattr(pycurl, 'PREREQFUNCTION') and hasattr(pycurl, 'OPENSOCKETFUNCTION')
+    assert pycurl.version_info()[4] & pycurl.VERSION_HTTP2
     args.output.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    # The workflow gives the independently controlled origin collector time to start.
+    time.sleep(args.start_delay_seconds)
     deadline = time.monotonic() + 300
     # Reverse case order across generators to reduce route/time confounding.
     cases = [('cloudflare', 'keepalive'), ('origin', 'fresh'),
@@ -117,6 +122,7 @@ def main():
               'requests_per_case': args.requests_per_case, 'idle_requests_per_case': 8,
               'surface': args.surface, 'expected_http_status': expected_status,
               'idle_gap_seconds': 6, 'bounded_seconds': 300,
+              'start_delay_seconds': args.start_delay_seconds,
               'tls_peer_verified': True, 'tls_hostname_verified': True,
               'redirects_followed': False, 'public_menu_get_only': args.surface == 'frontend',
               'authorization_denial_only': args.surface == 'backend_denial',
@@ -146,7 +152,7 @@ def main():
             if route == 'origin':
                 curl.setopt(pycurl.RESOLVE, [host + ':443:' + str(origin)])
             if args.surface == 'backend_denial':
-                # This protected endpoint rejects the invalid caller before any write.
+                # This protected endpoint rejects the anonymous caller before any write.
                 curl.setopt(pycurl.POSTFIELDS, '{}')
             try:
                 count = 8 if connections == 'idle_reuse' else args.requests_per_case
@@ -156,7 +162,8 @@ def main():
                     record = {'kind': 'request', 'run_id': run, 'node': node,
                               'route': route, 'connections': connections,
                               'request_id': str(uuid.uuid4()),
-                              'started_epoch_seconds': time.time(), 'socket': None, 'socket_attempts': []}
+                              'started_epoch_seconds': time.time(), 'socket': None,
+                              'socket_attempts': [], 'connect_socket_attempts': []}
                     bytes_received = 0
                     def discard(data):
                         nonlocal bytes_received
@@ -171,8 +178,28 @@ def main():
                             'configured_origin': ipaddress.ip_address(peer) == origin}
                         record['socket_attempts'].append(record['socket'])
                         return 0
+                    def open_socket(purpose, curl_address):
+                        family, socktype, protocol, address = curl_address
+                        assert family == socket.AF_INET and address[1] == 443
+                        connection = socket.socket(family, socktype, protocol)
+                        try:
+                            # Let the OS allocate an ephemeral port before connect/TLS.
+                            # No fixed interface or source address is selected.
+                            connection.bind(('0.0.0.0', 0))
+                            record['connect_socket_attempts'].append({
+                                'peer_ip_fingerprint': fingerprint(run, address[0]),
+                                'peer_port': address[1],
+                                'client_port': connection.getsockname()[1],
+                                'allocated_epoch_seconds': time.time(),
+                                'configured_origin': ipaddress.ip_address(address[0]) == origin,
+                            })
+                            return connection
+                        except Exception:
+                            connection.close()
+                            raise
                     curl.setopt(pycurl.WRITEFUNCTION, discard)
                     curl.setopt(pycurl.PREREQFUNCTION, socket_ready)
+                    curl.setopt(pycurl.OPENSOCKETFUNCTION, open_socket)
                     headers = ['X-Menu-Benchmark-Id: ' + record['request_id'], 'X-Menu-Benchmark-Run: ' + run]
                     if args.surface == 'backend_denial':
                         headers += ['Authorization: Bearer ' + anon_key, 'apikey: ' + anon_key, 'Content-Type: application/json']
@@ -188,6 +215,9 @@ def main():
                                    'response_bytes': bytes_received,
                                    'new_connections': int(curl.getinfo(pycurl.NUM_CONNECTS)),
                                    'negotiated_http_version': int(curl.getinfo(pycurl.INFO_HTTP_VERSION)),
+                                   'dns_ms': 1000 * curl.getinfo(pycurl.NAMELOOKUP_TIME),
+                                   'connect_ms': 1000 * curl.getinfo(pycurl.CONNECT_TIME),
+                                   'tls_ms': 1000 * curl.getinfo(pycurl.APPCONNECT_TIME),
                                    'elapsed_ms': 1000 * curl.getinfo(pycurl.TOTAL_TIME)})
                     counts['requests'] += 1
                     counts['http_200'] += int(not code and record['http_status'] == 200)

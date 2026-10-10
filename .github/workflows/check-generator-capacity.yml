@@ -146,7 +146,7 @@ jobs:
           ANON_KEY: ${{ secrets.BENCHMARK_ANON_KEY }}
         run: |
           umask 077
-          "$RUNNER_TEMP/transport-venv/bin/python" probe-menu-transport.py "$RUNNER_TEMP/menu-transport.jsonl" --surface "$DIAGNOSTIC_SURFACE"
+          "$RUNNER_TEMP/transport-venv/bin/python" probe-menu-transport.py "$RUNNER_TEMP/menu-transport.jsonl" --surface "$DIAGNOSTIC_SURFACE" --start-delay-seconds 30
       - name: Stop capture and export safe records
         if: always()
         run: |
