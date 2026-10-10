@@ -42,6 +42,14 @@ class SocketCorrelationTests(unittest.TestCase):
         self.assertEqual(transport.matching_resets(request, [{**reset, 'epoch_seconds': 9.99}]), [])
         self.assertEqual(transport.matching_resets(request, [{**reset, 'epoch_seconds': 11.01}]), [])
 
+    def test_earlier_allocated_connection_can_win_after_another_socket_is_opened(self):
+        first = {'peer_ip_fingerprint': 'a', 'client_port': 12345, 'allocated_epoch_seconds': 10}
+        later = {'peer_ip_fingerprint': 'b', 'client_port': 23456, 'allocated_epoch_seconds': 10.1}
+        request = {'socket': {'peer_ip_fingerprint': 'a', 'client_port': 12345, 'ready_epoch_seconds': 10.3},
+                   'connect_socket_attempts': [first, later], 'ended_epoch_seconds': 11}
+        reset = {'kind': 'tcp_reset', 'peer_ip_fingerprint': 'a', 'client_port': 12345, 'epoch_seconds': 10.2}
+        self.assertEqual(transport.matching_resets(request, [reset]), [reset])
+
 
 if __name__ == '__main__':
     unittest.main()

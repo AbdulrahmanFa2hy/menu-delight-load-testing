@@ -63,6 +63,10 @@ def analyze(directory, expected_nodes):
             assert request['route'] in ('cloudflare', 'origin') and request['connections'] in ('keepalive', 'fresh', 'idle_reuse')
             if request['socket']:
                 assert request['socket']['configured_origin'] == (request['route'] == 'origin')
+                if 'connect_socket_attempts' in request and request['new_connections']:
+                    assert any(attempt['client_port'] == request['socket']['client_port']
+                               and attempt['peer_ip_fingerprint'] == request['socket']['peer_ip_fingerprint']
+                               for attempt in request['connect_socket_attempts']), 'HTTP-ready socket not present in allocation records'
             case = cases[key]
             latencies[key].append(request['elapsed_ms'])
             case['requests'] += 1
