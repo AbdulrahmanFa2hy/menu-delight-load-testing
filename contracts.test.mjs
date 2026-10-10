@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import { sessionAllowed, aggregateSummaries, transportFailureKind, transportErrorCodes, workloadThresholds, sanitizeDiagnostic, diagnosticBodyKind, diagnosticPeerClass } from './contracts.mjs';
+import { sessionAllowed, aggregateSummaries, transportFailureKind, transportErrorCodes, workloadThresholds, sanitizeDiagnostic, diagnosticBodyKind, diagnosticPeerClass, requestWindow } from './contracts.mjs';
 import {capacityPlan, capacityStages} from './capacity-plan.mjs';
 import {workersBudget} from './workers-budget.mjs';
 
@@ -146,6 +146,25 @@ test('diagnostics reject unknown identities and never export URL, body or header
   assert.equal(diagnosticBodyKind(0, secret), 'transport');
 });
 
+test('a zero-phase timeout retains the real request window without retrying', () => {
+  let time = 1791660000000, calls = 0;
+  const window = requestWindow(() => {
+    calls++;
+    time += 15000;
+    return {status: 0, error_code: 1050, timings: {duration: 0}};
+  }, () => time);
+  assert.equal(calls, 1);
+  const tags = {run_id: '37100000000-1', service: 'protected-asset', status: '0', error_code: '1050',
+    started_ms: String(window.started), finished_ms: String(window.finished), duration_ms: '0', body_kind: 'transport'};
+  const result = sanitizeDiagnostic(tags, '2026-10-10T20:00:15Z');
+  assert.equal(result.started_ms, 1791660000000);
+  assert.equal(result.finished_ms, 1791660015000);
+  assert.equal(result.wall_duration_ms, 15000);
+  assert.equal(result.duration_ms, 0);
+  for (const finished of ['NaN', 'Infinity', '-1', '1791659999999', '1791660000000.5'])
+    assert.throws(() => sanitizeDiagnostic({...tags, finished_ms: finished}, result.utc));
+});
+
 test('network verification counts distinct actual exit IP fingerprints without raw IPs', () => {
   const a = summary(1), b = summary(2);
   a.meta.generator_network = b.meta.generator_network = {ip_fingerprint: 'a'.repeat(64), colo: 'IAD'};
@@ -159,7 +178,7 @@ test('public exporter keeps failed request correlation but drops raw metric secr
   try {
     const secret = 'https://private.example/?token=never-export';
     const tags = {run_id: '37100000000-1', request_id: '7f84ce1a-8c12-4e56-9abc-0123456789ab', service: 'entertainment-session',
-      status: '503', error_code: '0', started_ms: '1', duration_ms: '1200', body_kind: 'empty', proto: 'HTTP/2.0', cf_ray: '', url: secret};
+      status: '0', error_code: '1050', started_ms: '1791660000000', finished_ms: '1791660015000', duration_ms: '0', body_kind: 'transport', proto: '', cf_ray: '', url: secret};
     const network = {ip_fingerprint: 'a'.repeat(64), colo: 'IAD', cpu_count: 4, ipv6_available: false, proxy_configured: false};
     fs.writeFileSync(path.join(directory, 'generator-network.json'), JSON.stringify(network));
     fs.writeFileSync(path.join(directory, 'summary-node-1.json'), JSON.stringify({meta: {}}));
@@ -175,6 +194,8 @@ test('public exporter keeps failed request correlation but drops raw metric secr
     const output = fs.readFileSync(path.join(directory, 'diagnostics-node-1.json'), 'utf8');
     assert.ok(!output.includes(secret));
     const data = JSON.parse(output); assert.equal(data.failures, 1); assert.equal(data.records[0].request_id, tags.request_id);
+    assert.equal(data.records[0].wall_duration_ms, 15000);
+    assert.equal(data.records[0].duration_ms, 0);
     assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'summary-node-1.json'))).meta.generator_network.k6_verified, true);
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
 });
