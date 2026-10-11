@@ -7,6 +7,11 @@ from pathlib import Path
 CASES = {'cloudflare/keepalive', 'origin/fresh_iteration', 'cloudflare/fresh_iteration', 'origin/keepalive'}
 
 
+def expected_denial(request):
+    # expectedStatuses affects http_req_failed, not k6's HTTP status error code.
+    return request['status'] == 401 and request['error_code'] in (0, 1401)
+
+
 def matching_resets(request, resets):
     # A zero-phase timeout need not expose a socket. Never infer its client port.
     if not request.get('client_port') or not request.get('peer_ip_fingerprint'):
@@ -63,7 +68,7 @@ def analyze(directory, nodes=10):
             counts = cases[name]
             for dest in (counts, per_node[name]):
                 dest['requests'] += 1
-                dest['http_401'] += int(row['status'] == 401 and not row['error_code'])
+                dest['http_401'] += int(expected_denial(row))
                 dest['transport_errors'] += int(row['status'] == 0)
                 dest['http_errors'] += int(row['status'] not in (0, 401))
                 if row['status'] == 0:

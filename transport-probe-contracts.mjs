@@ -27,8 +27,12 @@ export function sanitizeTransportProbe(tags, utc) {
   if (!record.request_id || record.finished_ms === undefined) throw new Error('Missing request identity/window');
   if (tags.route === 'origin' && record.peer_class !== 'configured_origin' && record.status !== 0)
     throw new Error('Origin response used an unexpected peer');
+  const encoding = ['identity', 'gzip', 'br', 'deflate', 'zstd'].includes(tags.body_encoding) ? tags.body_encoding : 'unknown';
+  const contentLength = /^\d{1,7}$/.test(tags.response_content_length ?? '') ? Number(tags.response_content_length) : null;
   return {kind: 'request', ...record, node, route: tags.route, connections: tags.connections,
-    response_bytes: bytes, vu, iteration};
+    response_bytes: bytes, body_encoding: encoding,
+    response_content_length: contentLength !== null && contentLength <= 2 * 1024 * 1024 ? contentLength : null,
+    vu, iteration};
 }
 
 export function safeTransportSummary(data, expected) {

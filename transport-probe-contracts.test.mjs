@@ -24,6 +24,15 @@ test('successful origin response requires verified origin peer and bounded reque
   assert.throws(() => sanitizeTransportProbe({...tags, iteration: '8'}, '2026-10-11T00:00:25Z'));
   assert.throws(() => sanitizeTransportProbe({...tags, finished_ms: '9000'}, '2026-10-11T00:00:25Z'));
 });
+test('decoded body bytes and encoded HTTP length stay distinct without exposing headers', () => {
+  const record = sanitizeTransportProbe({...tags, status: '401', error_code: '1401', response_bytes: '40',
+    body_encoding: 'gzip', response_content_length: '60', headers: {Authorization: 'secret'}}, '2026-10-11T00:00:25Z');
+  assert.equal(record.response_bytes, 40);
+  assert.equal(record.response_content_length, 60);
+  assert.equal(record.body_encoding, 'gzip');
+  assert.doesNotMatch(JSON.stringify(record), /secret|Authorization|headers/);
+  assert.equal(sanitizeTransportProbe(tags, '2026-10-11T00:00:25Z').body_encoding, 'unknown');
+});
 test('summary requires actual start, full iteration coverage and sanitizes setup data', () => {
   const expected = {run_id: '123-1', node: 1, route: 'cloudflare', connections: 'keepalive', start_ms: 10000};
   const summary = {meta: {...expected, scenario_start_ms: 10001,

@@ -74,6 +74,8 @@ export default function () {
     peer_ip_fingerprint: /^\d{1,3}(\.\d{1,3}){3}$/.test(peer) ? crypto.sha256(`${run}|${peer}`, 'hex') : '',
     peer_class: diagnosticPeerClass(peer, origin, ranges), client_port: tcp?.[1] ?? '',
     cf_ray: response.headers['Cf-Ray'] ?? '', response_bytes: String(response.body?.byteLength ?? 0),
+    body_encoding: response.headers['Content-Encoding'] ?? 'identity',
+    response_content_length: response.headers['Content-Length'] ?? '',
     ...Object.fromEntries(['blocked', 'connecting', 'tls_handshaking', 'sending', 'waiting', 'receiving']
       .map(phase => [`${phase}_ms`, String(response.timings[phase])])),
   });
