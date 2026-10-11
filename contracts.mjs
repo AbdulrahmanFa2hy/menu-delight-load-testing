@@ -58,6 +58,13 @@ export function diagnosticPeerClass(ip, origin, ranges) {
   return 'other';
 }
 
+// Measure the whole synchronous request, including failures with zero k6 phases.
+export function requestWindow(send, now = Date.now) {
+  const started = now();
+  const response = send();
+  return {response, started, finished: now()};
+}
+
 export function sanitizeDiagnostic(tags, utc) {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
   const services = ['image-tracking-session', 'image-tracking-event', 'entertainment-session', 'menu-page', 'public-menu', 'menu-analytics', 'protected-asset', 'xr-engine', 'other'];
@@ -77,6 +84,13 @@ export function sanitizeDiagnostic(tags, utc) {
   }
   if (![result.status, result.error_code, result.started_ms, result.duration_ms].every(Number.isFinite) ||
     result.status < 0 || result.status > 599 || result.duration_ms < 0) throw new Error('Invalid diagnostic numeric value');
+  // Older captures have no explicit end. Preserve them without inventing a window.
+  if (tags.finished_ms !== undefined) {
+    result.finished_ms = Number(tags.finished_ms);
+    if (!Number.isSafeInteger(result.started_ms) || !Number.isSafeInteger(result.finished_ms) ||
+      result.started_ms < 0 || result.finished_ms < result.started_ms) throw new Error('Invalid diagnostic request window');
+    result.wall_duration_ms = result.finished_ms - result.started_ms;
+  }
   return result;
 }
 

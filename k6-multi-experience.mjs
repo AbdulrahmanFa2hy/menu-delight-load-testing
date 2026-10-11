@@ -3,7 +3,7 @@ import { sleep } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
 import crypto from 'k6/crypto';
 import execution from 'k6/execution';
-import { sessionAllowed, transportFailureKind, transportErrorCodes, workloadThresholds, diagnosticBodyKind, diagnosticPeerClass } from './contracts.mjs';
+import { sessionAllowed, transportFailureKind, transportErrorCodes, workloadThresholds, diagnosticBodyKind, diagnosticPeerClass, requestWindow } from './contracts.mjs';
 
 const mapping = JSON.parse(open('./restaurant-items.json'));
 const pausedRestaurants = JSON.parse(open('./paused-restaurants.json'));
@@ -82,6 +82,10 @@ function uuid() {
 }
 function body(response) { try { return response.json(); } catch { return null; } }
 function checked(ok, metric) { errors.add(!ok); if (metric) metric.add(ok); return ok; }
+function observeRequest(send, expectedDenial = false, context = null) {
+  const {response, started, finished} = requestWindow(send);
+  return observed(response, expectedDenial, {...context, started, finished});
+}
 function observed(response, expectedDenial = false, context = null) {
   const failed = response.status === 0;
   const timeout = failed && response.error_code === 1050;
@@ -97,7 +101,7 @@ function observed(response, expectedDenial = false, context = null) {
     transportKinds[transportFailureKind(response.status, code, response.error)].add(1);
     (transportCodes[code] ?? transportCodes[0]).add(1);
   }
-  if (capture && (context || failed || response.status >= 500)) {
+  if (capture && (context?.id || failed || response.status >= 500)) {
     // Parse only a native TCP tuple. The raw error can contain a private URL.
     const tcp = failed ? /read tcp [\d.]+:(\d+)->([\d.]+):443:/.exec(response.error ?? '') : null;
     const peer = tcp?.[2] ?? response.remote_ip ?? '';
@@ -109,7 +113,7 @@ function observed(response, expectedDenial = false, context = null) {
       url.startsWith(site + '/external/xr/') ? 'xr-engine' : 'other');
     diagnosticRequests.add(1, {run_id: __ENV.RUN_ID, service, request_id: context?.id ?? '',
       status: String(response.status), error_code: String(response.error_code ?? 0),
-      started_ms: String(context?.started ?? Date.now() - response.timings.duration), duration_ms: String(response.timings.duration),
+      started_ms: String(context.started), finished_ms: String(context.finished), duration_ms: String(response.timings.duration),
       body_kind: diagnosticBodyKind(response.status, response.body), proto: response.proto ?? '',
       peer_ip_fingerprint: peerFingerprint, client_port: tcp?.[1] ?? '',
       peer_class: diagnosticPeerClass(peer, __ENV.ORIGIN_ADDRESS, cloudflareRanges),
@@ -122,19 +126,18 @@ function observed(response, expectedDenial = false, context = null) {
 }
 function post(slug, payload) {
   const id = capture ? uuid() : '';
-  const started = Date.now();
-  const response = http.post(`${supabaseUrl}/functions/v1/${slug}`, JSON.stringify(payload), {
+  const response = observeRequest(() => http.post(`${supabaseUrl}/functions/v1/${slug}`, JSON.stringify(payload), {
     headers: capture ? {...headers, 'x-menu-benchmark-id': id, 'x-menu-benchmark-run': __ENV.RUN_ID} : headers,
-    timeout: '15s', tags: { name: slug } });
+    timeout: '15s', tags: { name: slug } }), false, capture ? {service: slug, id} : null);
   functionRateLimited.add(response.status === 429 ? 1 : 0);
   functionUnavailable.add(response.status >= 500 ? 1 : 0);
   functionTransportErrors.add(response.status === 0 ? 1 : 0);
-  return observed(response, false, capture ? {service: slug, id, started} : null);
+  return response;
 }
 function asset(url) {
   // Capabilities may only be sent to the configured site or backend origin.
   if (typeof url !== 'string' || !(url.startsWith(site + '/') || url.startsWith(supabaseUrl + '/'))) return checked(false, assets);
-  const res = observed(http.get(url, { timeout: '20s', redirects: 0, tags: { name: 'protected-asset' } }));
+  const res = observeRequest(() => http.get(url, { timeout: '20s', redirects: 0, tags: { name: 'protected-asset' } }));
   edgeHitAssets.add((res.headers['X-Ar-Asset-Cache'] ?? res.headers['x-ar-asset-cache']) === 'HIT');
   assetLatency.add(res.timings.duration);
   return checked(res.status === 200 && res.body?.length > 0, assets);
@@ -142,7 +145,7 @@ function asset(url) {
 function menuEvent(restaurant, item) {
   const event = { id: uuid(), event_type: item ? 'live_preview_open' : 'menu_open', restaurant_id: restaurant };
   if (item) event.item_id = item;
-  const res = observed(http.post(site + '/api/analytics/events', JSON.stringify({ events: [event] }), {
+  const res = observeRequest(() => http.post(site + '/api/analytics/events', JSON.stringify({ events: [event] }), {
     headers: { 'Content-Type': 'application/json', Origin: site }, timeout: '15s', tags: { name: 'menu-analytics' },
   }));
   const ok = checked(res.status === 202 && body(res)?.accepted === 1, analyticsDelivery);
@@ -165,10 +168,10 @@ export function setup() {
   // Denial is expected for these fixtures and is verified separately from the
   // successful visitor workload. Do not change restaurant access settings.
   for (const restaurant of pausedRestaurants) {
-    const menu = observed(http.get(`${site}/api/public-menu/${restaurant}`, {
+    const menu = observeRequest(() => http.get(`${site}/api/public-menu/${restaurant}`, {
       timeout: '15s', responseCallback: http.expectedStatuses(404), tags: { name: 'paused-menu-denial' },
     }), true);
-    const event = observed(http.post(site + '/api/analytics/events', JSON.stringify({ events: [{ id: uuid(), event_type: 'menu_open', restaurant_id: restaurant }] }), {
+    const event = observeRequest(() => http.post(site + '/api/analytics/events', JSON.stringify({ events: [{ id: uuid(), event_type: 'menu_open', restaurant_id: restaurant }] }), {
       headers: { 'Content-Type': 'application/json', Origin: site }, timeout: '15s',
       responseCallback: http.expectedStatuses(400), tags: { name: 'paused-analytics-denial' },
     }), true);
@@ -188,9 +191,9 @@ export default function () {
   const roll = mode === 'tracking' ? 0.7 : mode === 'games' ? 0.9 : Math.random();
   if (roll < 0.60) {
     const restaurant = restaurants[Math.floor(Math.random() * restaurants.length)];
-    const page = observed(http.get(`${site}/menu/${restaurant}`, { timeout: '15s', tags: { name: 'menu-page' } }));
+    const page = observeRequest(() => http.get(`${site}/menu/${restaurant}`, { timeout: '15s', tags: { name: 'menu-page' } }));
     ok = checked(page.status === 200) && ok;
-    const menu = observed(http.get(`${site}/api/public-menu/${restaurant}`, { timeout: '15s', tags: { name: 'public-menu' } }));
+    const menu = observeRequest(() => http.get(`${site}/api/public-menu/${restaurant}`, { timeout: '15s', tags: { name: 'public-menu' } }));
     edgeHitMenu.add((menu.headers['Cf-Cache-Status'] ?? menu.headers['CF-Cache-Status']) === 'HIT');
     menuLatency.add(menu.timings.duration);
     ok = checked(menu.status === 200 && body(menu) !== null) && ok;
@@ -219,7 +222,7 @@ export default function () {
     const data = body(res);
     ok = checked(sessionAllowed(res.status, data), gameAdmission);
     if (ok) {
-      const xr = observed(http.get(site + '/external/xr/v-c4781db3f6e5f3ec8285/xr.js', { timeout: '15s', tags: { name: 'xr-engine' } }));
+      const xr = observeRequest(() => http.get(site + '/external/xr/v-c4781db3f6e5f3ec8285/xr.js', { timeout: '15s', tags: { name: 'xr-engine' } }));
       ok = checked(xr.status === 200 && xr.body?.length > 0) && ok;
       const end = post('entertainment-session', { game_key: gameKey, session_token: data.session_token, action: 'end' });
       ok = checked(end.status === 200 && body(end)?.success === true) && ok;
