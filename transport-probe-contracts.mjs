@@ -5,6 +5,17 @@ export const probeVus = 100;
 export const probeIterations = 8;
 export const probePacingMs = 6250;
 export const probeSlotMs = 80000;
+export const clientVersions = ['1.3.0', '2.3.0'];
+export const clientCases = ['1.3.0/keepalive', '2.3.0/keepalive', '1.3.0/fresh_iteration', '2.3.0/fresh_iteration'];
+
+export function clientPlan(node, start) {
+  transportPlan(node, start); // Share the bounded schedule validation.
+  const cases = node % 2 ? clientCases : [...clientCases].reverse();
+  return cases.map((name, index) => {
+    const [client_version, connections] = name.split('/');
+    return {name, route: 'cloudflare', connections, client_version, start_ms: start + index * probeSlotMs};
+  });
+}
 
 export function transportPlan(node, start) {
   if (!Number.isInteger(node) || node < 1 || node > 10 || !Number.isSafeInteger(start) || start <= 0)
@@ -17,7 +28,9 @@ export function sanitizeTransportProbe(tags, utc) {
   const node = Number(tags.node);
   const bytes = Number(tags.response_bytes);
   const vu = Number(tags.vu), iteration = Number(tags.iteration);
+  const client_version = tags.client_version ?? '1.3.0';
   if (!Number.isInteger(node) || node < 1 || node > 10 ||
+      !clientVersions.includes(client_version) ||
       !transportCases.includes(`${tags.route}/${tags.connections}`) ||
       !Number.isSafeInteger(bytes) || bytes < 0 || bytes > 2 * 1024 * 1024 ||
       !Number.isInteger(vu) || vu < 1 || vu > probeVus ||
@@ -29,7 +42,7 @@ export function sanitizeTransportProbe(tags, utc) {
     throw new Error('Origin response used an unexpected peer');
   const encoding = ['identity', 'gzip', 'br', 'deflate', 'zstd'].includes(tags.body_encoding) ? tags.body_encoding : 'unknown';
   const contentLength = /^\d{1,7}$/.test(tags.response_content_length ?? '') ? Number(tags.response_content_length) : null;
-  return {kind: 'request', ...record, node, route: tags.route, connections: tags.connections,
+  return {kind: 'request', ...record, node, route: tags.route, connections: tags.connections, client_version,
     response_bytes: bytes, body_encoding: encoding,
     response_content_length: contentLength !== null && contentLength <= 2 * 1024 * 1024 ? contentLength : null,
     vu, iteration};
@@ -38,6 +51,7 @@ export function sanitizeTransportProbe(tags, utc) {
 export function safeTransportSummary(data, expected) {
   const meta = data.meta;
   if (!meta || meta.node !== expected.node || meta.route !== expected.route || meta.connections !== expected.connections ||
+      (meta.client_version ?? '1.3.0') !== (expected.client_version ?? '1.3.0') ||
       meta.run_id !== expected.run_id || !/^[0-9a-f]{64}$/.test(meta.network?.ip_fingerprint) ||
       !/^[A-Z]{3}$/.test(meta.network?.colo) || !Number.isSafeInteger(meta.scenario_start_ms) ||
       meta.scenario_start_ms < expected.start_ms || meta.scenario_start_ms > expected.start_ms + 2000)

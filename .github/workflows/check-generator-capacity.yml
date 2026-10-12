@@ -203,7 +203,7 @@ jobs:
           retention-days: 7
 
   prepare-k6-transport:
-    if: github.repository == 'AbdulrahmanFa2hy/menu-delight-load-testing' && github.ref == 'refs/heads/codex/frontend-socket-diagnostics' && inputs.diagnostic_client == 'k6_concurrent'
+    if: github.repository == 'AbdulrahmanFa2hy/menu-delight-load-testing' && (github.ref == 'refs/heads/codex/frontend-socket-diagnostics' || github.ref == 'refs/heads/codex/k6-client-version-comparison') && inputs.diagnostic_client == 'k6_concurrent'
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     outputs:
@@ -237,6 +237,7 @@ jobs:
       NODE_INDEX: ${{ matrix.node }}
       EXPECTED_NODES: '10'
       RUN_START_MS: ${{ needs.prepare-k6-transport.outputs.start_ms }}
+      PROBE_PROFILE: ${{ github.ref == 'refs/heads/codex/k6-client-version-comparison' && 'client_versions' || 'routes' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -247,6 +248,20 @@ jobs:
       - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
         with:
           k6-version: '1.3.0'
+      - name: Retain verified baseline client
+        if: github.ref == 'refs/heads/codex/k6-client-version-comparison'
+        run: |
+          mkdir -p "$RUNNER_TEMP/k6-clients/1.3.0"
+          cp -- "$(command -v k6)" "$RUNNER_TEMP/k6-clients/1.3.0/k6"
+      - uses: grafana/setup-k6-action@43b9fc21641a76002687994433dd586f56e791b1 # v1
+        if: github.ref == 'refs/heads/codex/k6-client-version-comparison'
+        with:
+          k6-version: '2.3.0'
+      - name: Retain comparison client
+        if: github.ref == 'refs/heads/codex/k6-client-version-comparison'
+        run: |
+          mkdir -p "$RUNNER_TEMP/k6-clients/2.3.0"
+          cp -- "$(command -v k6)" "$RUNNER_TEMP/k6-clients/2.3.0/k6"
       - name: Validate probe contracts
         run: node --test transport-probe-contracts.test.mjs
       - name: Measure generator network
@@ -295,7 +310,7 @@ jobs:
 
   aggregate-k6-transport:
     needs: k6-transport
-    if: always() && github.repository == 'AbdulrahmanFa2hy/menu-delight-load-testing' && github.ref == 'refs/heads/codex/frontend-socket-diagnostics' && inputs.diagnostic_client == 'k6_concurrent'
+    if: always() && github.repository == 'AbdulrahmanFa2hy/menu-delight-load-testing' && (github.ref == 'refs/heads/codex/frontend-socket-diagnostics' || github.ref == 'refs/heads/codex/k6-client-version-comparison') && inputs.diagnostic_client == 'k6_concurrent'
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
@@ -311,10 +326,12 @@ jobs:
           path: safe-k6-transport
           merge-multiple: true
       - name: Verify comparison coverage and request windows
+        env:
+          PROBE_PROFILE: ${{ github.ref == 'refs/heads/codex/k6-client-version-comparison' && 'client_versions' || 'routes' }}
         run: |
           node --test transport-probe-contracts.test.mjs
           python3 -m unittest test_k6_transport.py
-          python3 analyze-k6-transport.py safe-k6-transport k6-transport-result.json
+          python3 analyze-k6-transport.py safe-k6-transport k6-transport-result.json --profile "$PROBE_PROFILE"
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: always()
         with:

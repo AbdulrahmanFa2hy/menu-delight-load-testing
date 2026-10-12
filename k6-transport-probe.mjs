@@ -4,12 +4,14 @@ import crypto from 'k6/crypto';
 import execution from 'k6/execution';
 import {Counter, Trend} from 'k6/metrics';
 import {diagnosticPeerClass, requestWindow} from './contracts.mjs';
-import {transportCases, probeVus, probeIterations, probePacingMs} from './transport-probe-contracts.mjs';
+import {transportCases, clientVersions, probeVus, probeIterations, probePacingMs} from './transport-probe-contracts.mjs';
 
 const route = __ENV.PROBE_ROUTE, connections = __ENV.PROBE_CONNECTIONS;
 const start = Number(__ENV.PROBE_START_MS), node = Number(__ENV.NODE_INDEX);
 const run = __ENV.RUN_ID, origin = __ENV.ORIGIN_ADDRESS;
+const client_version = __ENV.PROBE_CLIENT_VERSION ?? '1.3.0';
 if (!transportCases.includes(`${route}/${connections}`) || !Number.isSafeInteger(start) ||
+    !clientVersions.includes(client_version) ||
     !Number.isInteger(node) || node < 1 || node > 10 || !/^\d{1,20}-\d{1,3}$/.test(run ?? '') ||
     !/^\d{1,3}(\.\d{1,3}){3}$/.test(origin ?? '') || origin.split('.').some(n => Number(n) > 255))
   throw new Error('Invalid bounded transport configuration');
@@ -67,14 +69,14 @@ export default function () {
   const tcp = response.status === 0 ? /read tcp [\d.]+:(\d+)->([\d.]+):443:/.exec(response.error ?? '') : null;
   const peer = tcp?.[2] ?? response.remote_ip ?? '';
   records.add(1, {run_id: run, node: String(node), service: 'other', request_id: id,
-    route, connections, vu: String(__VU), iteration: String(__ITER),
+    route, connections, client_version, vu: String(__VU), iteration: String(__ITER),
     status: String(response.status), error_code: String(response.error_code ?? 0),
     started_ms: String(started), finished_ms: String(finished), duration_ms: String(response.timings.duration),
     body_kind: response.status === 0 ? 'transport' : 'json_other', proto: response.proto ?? '',
     peer_ip_fingerprint: /^\d{1,3}(\.\d{1,3}){3}$/.test(peer) ? crypto.sha256(`${run}|${peer}`, 'hex') : '',
     peer_class: diagnosticPeerClass(peer, origin, ranges), client_port: tcp?.[1] ?? '',
     cf_ray: response.headers['Cf-Ray'] ?? '', response_bytes: String(response.body?.byteLength ?? 0),
-    body_encoding: response.headers['Content-Encoding'] ?? 'identity',
+    body_encoding: response.headers['Content-Encoding'] ?? 'unknown',
     response_content_length: response.headers['Content-Length'] ?? '',
     ...Object.fromEntries(['blocked', 'connecting', 'tls_handshaking', 'sending', 'waiting', 'receiving']
       .map(phase => [`${phase}_ms`, String(response.timings[phase])])),
@@ -86,7 +88,7 @@ export default function () {
 }
 
 export function handleSummary(data) {
-  data.meta = {run_id: run, node, route, connections,
+  data.meta = {run_id: run, node, route, connections, client_version,
     network: data.setup_data};
   data.meta.scenario_start_ms = data.metrics.probe_start?.values?.min ?? 0;
   delete data.setup_data;
