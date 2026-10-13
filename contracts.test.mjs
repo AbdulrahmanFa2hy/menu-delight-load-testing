@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import { sessionAllowed, aggregateSummaries, transportFailureKind, transportErrorCodes, workloadThresholds, sanitizeDiagnostic, diagnosticBodyKind, diagnosticPeerClass, requestWindow } from './contracts.mjs';
+import { sessionAllowed, aggregateSummaries, transportFailureKind, transportErrorCodes, workloadThresholds, sanitizeDiagnostic, diagnosticBodyKind, diagnosticPeerClass, requestWindow, shouldCaptureDiagnostic } from './contracts.mjs';
 import {capacityPlan, capacityStages} from './capacity-plan.mjs';
 import {workersBudget} from './workers-budget.mjs';
 
@@ -165,6 +165,24 @@ test('a zero-phase timeout retains the real request window without retrying', ()
     assert.throws(() => sanitizeDiagnostic({...tags, finished_ms: finished}, result.utc));
 });
 
+test('successful protected assets retain safe timings and fixed cache labels', () => {
+  assert.equal(shouldCaptureDiagnostic(true, 'protected-asset', '', 200), true);
+  assert.equal(shouldCaptureDiagnostic(false, 'protected-asset', '', 200), false);
+  assert.equal(shouldCaptureDiagnostic(true, 'menu-page', '', 200), false);
+  const secret = 'https://private.example/?token=never-export';
+  const tags = {run_id:'37100000000-1', service:'protected-asset', status:'200', error_code:'0',
+    started_ms:'1000', finished_ms:'2500', duration_ms:'1200', body_kind:'non_json',
+    waiting_ms:'900', receiving_ms:'300', asset_cache:'HIT', cf_cache:'DYNAMIC', url:secret};
+  const row = sanitizeDiagnostic(tags, '2026-10-13T11:00:00Z');
+  assert.equal(row.request_id, null);
+  assert.equal(row.asset_cache, 'HIT'); assert.equal(row.cf_cache, 'DYNAMIC');
+  assert.equal(row.waiting_ms, 900); assert.equal(row.receiving_ms, 300);
+  assert.equal(row.wall_duration_ms, 1500);
+  const invalid = sanitizeDiagnostic({...tags, asset_cache:secret, cf_cache:secret}, row.utc);
+  assert.equal(invalid.asset_cache, 'unknown'); assert.equal(invalid.cf_cache, 'unknown');
+  assert.ok(!JSON.stringify(invalid).includes('never-export'));
+});
+
 test('network verification counts distinct actual exit IP fingerprints without raw IPs', () => {
   const a = summary(1), b = summary(2);
   a.meta.generator_network = b.meta.generator_network = {ip_fingerprint: 'a'.repeat(64), colo: 'IAD'};
@@ -186,6 +204,12 @@ test('public exporter keeps failed request correlation but drops raw metric secr
       {type: 'Point', metric: 'http_req_duration', data: {tags: {url: secret}}},
       {type: 'Point', metric: 'generator_exit_probe', data: {tags: network}},
       {type: 'Point', metric: 'request_diagnostic', data: {time: '2026-10-03T12:00:00Z', tags}},
+      {type: 'Point', metric: 'request_diagnostic', data: {time: '2026-10-03T12:00:00Z',
+        tags: {...tags, request_id:'', service:'entertainment-session', status:'200', error_code:'0'}}},
+      {type: 'Point', metric: 'request_diagnostic', data: {time: '2026-10-03T12:00:00Z',
+        tags: {...tags, request_id:'', service:'protected-asset', status:'200', error_code:'0', asset_cache:'HIT', cf_cache:secret}}},
+      ...Array.from({length:1300}, () => ({type:'Point', metric:'request_diagnostic', data:{time:'2026-10-03T12:00:00Z',
+        tags:{...tags, request_id:'', service:'protected-asset', status:'200', error_code:'0', duration_ms:'1200'}}})),
     ];
     fs.writeFileSync(path.join(directory, 'benchmark-private-metrics.json'), rows.map(x => JSON.stringify(x)).join('\n'));
     execFileSync(process.execPath, [fileURLToPath(new URL('./collect-diagnostics.mjs', import.meta.url))], {
@@ -196,6 +220,10 @@ test('public exporter keeps failed request correlation but drops raw metric secr
     const data = JSON.parse(output); assert.equal(data.failures, 1); assert.equal(data.records[0].request_id, tags.request_id);
     assert.equal(data.records[0].wall_duration_ms, 15000);
     assert.equal(data.records[0].duration_ms, 0);
+    assert.equal(data.records.length, 1200);
+    const asset = data.records.find(record => record.service === 'protected-asset');
+    assert.equal(asset.asset_cache, 'HIT'); assert.equal(asset.cf_cache, 'unknown');
+    assert.equal(asset.request_id, null);
     assert.equal(JSON.parse(fs.readFileSync(path.join(directory, 'summary-node-1.json'))).meta.generator_network.k6_verified, true);
   } finally { fs.rmSync(directory, {recursive: true, force: true}); }
 });

@@ -1,6 +1,10 @@
 """Export TCP reset metadata only; never save packets, payloads or raw addresses."""
 import hashlib, ipaddress, json, pathlib, re, shutil, signal, subprocess, sys, threading, time
 
+# Sustained fresh-connection runs can exceed 1,000 observations on one runner.
+# Keep metadata bounded and continue counting omissions after reaching the cap.
+MAX_RESET_RECORDS = 5000
+
 def parse_reset(line, local, run):
     match=re.search(r'^(\d+\.\d+)\s+.*?\s(\S+) > (\S+):',line)
     if not match:return None
@@ -28,7 +32,7 @@ def capture(target, run):
         for interface in json.loads(subprocess.check_output(['ip','-json','address','show'])):
             for address in interface.get('addr_info',[]):local.add(address['local'])
     with target.open('w') as output:
-        output.write(json.dumps({'kind':'capture_status','available':available})+'\n');output.flush()
+        output.write(json.dumps({'kind':'capture_status','available':available,'max_records':MAX_RESET_RECORDS})+'\n');output.flush()
         if not available:return
         process=subprocess.Popen(['tcpdump','-n','-l','-tt','-q','-s','96','-i','any','tcp port 443 and (tcp[tcpflags] & tcp-rst != 0)'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
         count=0
@@ -38,7 +42,7 @@ def capture(target, run):
                 record=parse_reset(line,local,run)
                 if record is None:continue
                 count+=1
-                if count<=1000:output.write(json.dumps(record)+'\n');output.flush()
+                if count<=MAX_RESET_RECORDS:output.write(json.dumps(record)+'\n');output.flush()
         thread=threading.Thread(target=read,daemon=True);thread.start()
         try:
             deadline=time.monotonic()+660
@@ -46,6 +50,6 @@ def capture(target, run):
         finally:
             if process.poll() is None:process.terminate()
             process.wait(timeout=3);thread.join(timeout=3)
-            output.write(json.dumps({'kind':'capture_final','reset_records':min(count,1000),'omitted_records':max(0,count-1000),'exit_code':process.returncode})+'\n');output.flush()
+            output.write(json.dumps({'kind':'capture_final','reset_records':min(count,MAX_RESET_RECORDS),'omitted_records':max(0,count-MAX_RESET_RECORDS),'exit_code':process.returncode})+'\n');output.flush()
 
 if __name__=='__main__':capture(pathlib.Path(sys.argv[1]),sys.argv[2])
