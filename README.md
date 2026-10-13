@@ -73,3 +73,20 @@ HTTP 200 with `unavailable` is a failed admission. Every asset, game end, and an
 Run `node --test contracts.test.mjs` to verify admission and aggregation rules. The workload is 60% menus, 25% tracking and 15% games with 5–8 seconds of think time. Ten visitors share each runner IP at the 100-VU baseline. The current public analytics gateway permits 100 events per IP and 200 per restaurant in fixed two-second Redis windows; these are not per-minute limits. Public tracking/game session limits are 1,200 requests per minute per runtime isolate, not distributed quotas. Verify deployed guards before each increase. Higher workloads can legitimately trigger guards and require more load-generator IPs. We do not bypass them. A 429 response still fails the run. Diagnostics distinguish rate limiting, server errors and transport errors. GitHub standard runners, concurrent jobs and artifact storage remain subject to the account's usage limits.
 
 The 90-second shutdown grace allows in-flight journeys to finish within their existing request deadlines. It does not extend HTTP deadlines or relax any threshold. Diagnostics count timeouts, cancellations, other transport failures, unexpected client errors, server errors and edge challenges without logging private URLs. Cloudflare 499 means a client disconnected; it alone does not identify whether a test cancellation, request timeout or network problem caused the disconnect.
+# Controlled client-version comparison
+
+The diagnostic branch `codex/k6-client-version-comparison` extends only the manual
+generator diagnostic. Select ten generators, `backend_denial`, and `k6_concurrent`.
+Every generator runs k6 **1.3.0 and 2.3.0**, each with keepalive and fresh iteration
+connections, on the Cloudflare route. Case order is reversed on even nodes. Each
+case has 100 VUs, eight paced requests per VU and an 80-second slot; total protected
+denial traffic is bounded at 32,000 requests. Both clients use the same verified
+outgoing IP on each generator. Version checks and binary SHA-256 records prevent
+labeling one installed executable as two versions.
+
+Missing authorization must return 401 before database reads or writes. The probe
+does not create analytics records, consume the protected asset Worker quota, add
+retries, change TLS checks, or change the main workload/latency gates. A successful
+workflow means complete diagnostic evidence; retained transport errors still need
+investigation. Run the analyzer with `--profile client_versions` for this branch.
+No client upgrade or capacity claim follows from a clean bounded probe alone.
