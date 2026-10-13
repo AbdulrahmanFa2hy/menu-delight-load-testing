@@ -39,6 +39,10 @@ export function diagnosticBodyKind(status, text) {
   catch { return 'non_json'; }
 }
 
+export function shouldCaptureDiagnostic(enabled, service, requestId, status) {
+  return Boolean(enabled && (requestId || service === 'protected-asset' || status === 0 || status >= 500));
+}
+
 export function diagnosticPeerClass(ip, origin, ranges) {
   const numeric = value => {
     if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(value ?? '')) return null;
@@ -77,6 +81,10 @@ export function sanitizeDiagnostic(tags, utc) {
     peer_class: ['cloudflare', 'configured_origin', 'other', 'unknown'].includes(tags.peer_class) ? tags.peer_class : 'unknown',
     client_port: /^\d{1,5}$/.test(tags.client_port ?? '') && Number(tags.client_port) > 0 && Number(tags.client_port) <= 65535 ? Number(tags.client_port) : null,
     cf_ray: /^[0-9a-f]{16}-[A-Z]{3}$/.test(tags.cf_ray) ? tags.cf_ray : null};
+  if (tags.service === 'protected-asset') {
+    result.asset_cache = ['HIT', 'MISS', 'BYPASS'].includes(tags.asset_cache) ? tags.asset_cache : 'unknown';
+    result.cf_cache = ['HIT', 'MISS', 'EXPIRED', 'STALE', 'BYPASS', 'DYNAMIC', 'REVALIDATED', 'UPDATING'].includes(tags.cf_cache) ? tags.cf_cache : 'unknown';
+  }
   for (const phase of ['blocked', 'connecting', 'tls_handshaking', 'sending', 'waiting', 'receiving']) {
     const value = Number(tags[`${phase}_ms`] ?? 0);
     if (!Number.isFinite(value) || value < 0) throw new Error('Invalid diagnostic phase timing');

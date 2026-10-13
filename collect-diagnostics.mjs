@@ -31,7 +31,8 @@ if (fs.existsSync(pidFile)) {
 }
 const raw = path.join(process.env.RUNNER_TEMP, 'benchmark-private-metrics.json');
 const records = [];
-let successful = 0, failures = 0, omittedFailures = 0;
+const successfulByService = new Map();
+let failures = 0, omittedFailures = 0;
 let exitProbe = null;
 if (fs.existsSync(raw)) {
   for await (const line of readline.createInterface({input: fs.createReadStream(raw), crlfDelay: Infinity})) {
@@ -45,7 +46,12 @@ if (fs.existsSync(raw)) {
     const record = sanitizeDiagnostic(row.data.tags, row.data.time);
     const failed = record.status === 0 || record.status >= 500;
     if (failed) { failures++; if (failures <= 1000) records.push(record); else omittedFailures++; }
-    else if (++successful % 100 === 1 && records.length < 1200) records.push(record);
+    else {
+      const seen = (successfulByService.get(record.service) ?? 0) + 1;
+      successfulByService.set(record.service, seen);
+      const slowAsset = record.service === 'protected-asset' && record.duration_ms >= 1000;
+      if ((seen % 100 === 1 || slowAsset) && records.length < 1200) records.push(record);
+    }
   }
   fs.writeFileSync(`diagnostics-node-${node}.json`, JSON.stringify({node, failures, omitted_failures: omittedFailures, records}, null, 2));
 }

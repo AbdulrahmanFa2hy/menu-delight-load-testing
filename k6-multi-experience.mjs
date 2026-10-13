@@ -3,7 +3,7 @@ import { sleep } from 'k6';
 import { Counter, Rate, Trend } from 'k6/metrics';
 import crypto from 'k6/crypto';
 import execution from 'k6/execution';
-import { sessionAllowed, transportFailureKind, transportErrorCodes, workloadThresholds, diagnosticBodyKind, diagnosticPeerClass, requestWindow } from './contracts.mjs';
+import { sessionAllowed, transportFailureKind, transportErrorCodes, workloadThresholds, diagnosticBodyKind, diagnosticPeerClass, requestWindow, shouldCaptureDiagnostic } from './contracts.mjs';
 
 const mapping = JSON.parse(open('./restaurant-items.json'));
 const pausedRestaurants = JSON.parse(open('./paused-restaurants.json'));
@@ -101,16 +101,16 @@ function observed(response, expectedDenial = false, context = null) {
     transportKinds[transportFailureKind(response.status, code, response.error)].add(1);
     (transportCodes[code] ?? transportCodes[0]).add(1);
   }
-  if (capture && (context?.id || failed || response.status >= 500)) {
+  const url = response.request?.url ?? '';
+  const service = context?.service ?? (url.startsWith(site + '/menu/') ? 'menu-page' :
+    url.startsWith(site + '/api/public-menu/') ? 'public-menu' : url.startsWith(site + '/api/analytics/events') ? 'menu-analytics' :
+    url.startsWith(site + '/api/ar-assets/') || url.startsWith(supabaseUrl + '/storage/') ? 'protected-asset' :
+    url.startsWith(site + '/external/xr/') ? 'xr-engine' : 'other');
+  if (shouldCaptureDiagnostic(capture, service, context?.id, response.status)) {
     // Parse only a native TCP tuple. The raw error can contain a private URL.
     const tcp = failed ? /read tcp [\d.]+:(\d+)->([\d.]+):443:/.exec(response.error ?? '') : null;
     const peer = tcp?.[2] ?? response.remote_ip ?? '';
     const peerFingerprint = /^\d{1,3}(\.\d{1,3}){3}$/.test(peer) ? crypto.sha256(__ENV.RUN_ID + '|' + peer, 'hex') : '';
-    const url = response.request?.url ?? '';
-    const service = context?.service ?? (url.startsWith(site + '/menu/') ? 'menu-page' :
-      url.startsWith(site + '/api/public-menu/') ? 'public-menu' : url.startsWith(site + '/api/analytics/events') ? 'menu-analytics' :
-      url.startsWith(site + '/api/ar-assets/') || url.startsWith(supabaseUrl + '/storage/') ? 'protected-asset' :
-      url.startsWith(site + '/external/xr/') ? 'xr-engine' : 'other');
     diagnosticRequests.add(1, {run_id: __ENV.RUN_ID, service, request_id: context?.id ?? '',
       status: String(response.status), error_code: String(response.error_code ?? 0),
       started_ms: String(context.started), finished_ms: String(context.finished), duration_ms: String(response.timings.duration),
@@ -119,7 +119,10 @@ function observed(response, expectedDenial = false, context = null) {
       peer_class: diagnosticPeerClass(peer, __ENV.ORIGIN_ADDRESS, cloudflareRanges),
       ...Object.fromEntries(['blocked', 'connecting', 'tls_handshaking', 'sending', 'waiting', 'receiving']
         .map(key => [`${key}_ms`, String(response.timings[key] ?? 0)])),
-      cf_ray: response.headers['Cf-Ray'] ?? response.headers['CF-Ray'] ?? ''});
+      cf_ray: response.headers['Cf-Ray'] ?? response.headers['CF-Ray'] ?? '',
+      ...(service === 'protected-asset' ? {
+        asset_cache: response.headers['X-Ar-Asset-Cache'] ?? response.headers['x-ar-asset-cache'] ?? '',
+        cf_cache: response.headers['Cf-Cache-Status'] ?? response.headers['cf-cache-status'] ?? ''} : {})});
   }
   // Never log response.error: it can contain a private capability URL.
   return response;

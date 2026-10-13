@@ -1,5 +1,6 @@
-import importlib.util, json, unittest
+import importlib.util, json, tempfile, unittest
 from pathlib import Path
+from unittest.mock import patch
 spec=importlib.util.spec_from_file_location('capture_generator_resets',Path(__file__).with_name('capture-generator-resets.py'))
 module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
 parse_reset=module.parse_reset
@@ -19,5 +20,30 @@ class ResetMetadataTests(unittest.TestCase):
         for line in ['secret-url?token=never-export','1791030000.123 IP 999.1.2.3.443 > 10.1.0.4.50000: tcp 0',
             '1791030000.123 IP 172.67.1.2.443 > 10.9.0.4.50000: tcp 0','1791030000.123 IP 172.67.1.2.443 > 10.1.0.4.99999: tcp 0']:
             self.assertIsNone(parse_reset(line,{'10.1.0.4'},'37100000000-1'))
+
+    def test_sustained_capture_retains_burst_and_reports_overflow(self):
+        count = module.MAX_RESET_RECORDS + 32
+        line = '1791030000.123 eth0 In IP 172.67.1.2.443 > 10.1.0.4.41234: tcp 0 secret-url?token=never-export'
+        class FinishedCapture:
+            stdout = iter([line] * count)
+            returncode = 0
+            def poll(self): return 0
+            def wait(self, timeout): return 0
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'resets.jsonl'
+            with patch.object(module.signal, 'signal'), \
+                 patch.object(module.shutil, 'which', return_value='/usr/bin/tcpdump'), \
+                 patch.object(module.subprocess, 'check_output', return_value=b'[{"addr_info":[{"local":"10.1.0.4"}]}]'), \
+                 patch.object(module.subprocess, 'Popen', return_value=FinishedCapture()):
+                module.capture(target, '37100000000-1')
+            text = target.read_text()
+            rows = [json.loads(row) for row in text.splitlines()]
+        self.assertEqual(rows[0]['max_records'], module.MAX_RESET_RECORDS)
+        self.assertEqual(len(rows), module.MAX_RESET_RECORDS + 2)
+        self.assertEqual(rows[-1], {'kind':'capture_final','reset_records':module.MAX_RESET_RECORDS,
+                                   'omitted_records':32,'exit_code':0})
+        self.assertTrue(all(row['kind']=='tcp_reset' for row in rows[1:-1]))
+        self.assertNotIn('never-export', text)
+        self.assertNotIn('172.67.1.2', text)
 
 if __name__=='__main__':unittest.main()
