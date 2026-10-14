@@ -65,3 +65,43 @@ For a local smoke check, set `RUN_ID`, `NODE_INDEX` and `ORIGIN_ADDRESS`, instal
 the pinned client, and run `probe-menu-transport.py OUTPUT --requests-per-case 5`.
 The extended smoke sample has 36 requests, including the idle cases, and cannot
 pass the ten-node aggregate. The original version's smoke sample had 20.
+
+## Authenticated tracking and game comparison
+
+Use `check-generator-capacity.yml` on `codex/authenticated-transport-diagnostics`
+with `diagnostic_surface=authenticated_backend`, `generator_count=10`,
+`authenticated_seconds=60` or `300`, and `authenticated_connections=keepalive`
+or `fresh_iteration`. Only manual dispatch in this repository can prepare the
+ten private fixture capabilities. Existing readiness and denial jobs keep their
+own branch guards. Every action stays pinned to its complete commit SHA.
+
+Each generator runs tracking/Cloudflare, tracking/origin, games/Cloudflare and
+games/origin. Even nodes swap routes within each service pair. Both routes
+run simultaneously on five generators and then exchange the same generators.
+The probe uses 25 VUs per node, IPv4, TLS verification, 15-second request
+deadlines, and 6.25-second pacing with a spread initial start. There are eight
+or 48 journeys per VU per case: at most 16,000 or 96,000 backend requests per
+run. All ten observed exits must be distinct and stable. Valid tracking
+sessions send three analytics events. Games start and end using the admitted
+session capability. These writes are real and counted, with no automatic
+retry of an ambiguous write. No asset, menu, XR or asset Worker is requested.
+
+This is a backend transport diagnostic. Admission, delivery and journey gates
+remain above 99%, error rates below 1%, and admission P95 below 2.5 seconds.
+Failures are retained and subsequent cases still run. Aggregate `complete`
+means complete evidence; `criteria_passed` is reported separately.
+`capacity_certification` is always false.
+
+Public artifacts allow only safe UUIDs, timing, fixed labels, status/error
+codes, body classification, decoded response bytes, encoded Content-Length,
+protocol, CF-Ray, hashed peers, resets and bounded numeric observations.
+Bodies, capability URLs, credentials and raw errors are never exported.
+VU-observed connection sequence/age is not an exact HTTP/2 socket identity.
+A missing client port cannot create an exact socket join. Collectors support
+a bounded 1,850-second window for the longer comparison.
+
+Validate with `node --test authenticated-probe-contracts.test.mjs` and
+`python3 -m unittest test_authenticated_transport.py test_generator_resets.py`.
+Independently compare analyzer output from the exact run commit, then join
+UUIDs/statuses/bytes to the complete proxy/native and controlled-origin capture.
+Evaluate failed SLOs even when the workflow successfully collected evidence.
