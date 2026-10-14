@@ -1,5 +1,5 @@
 """Export TCP reset metadata only; never save packets, payloads or raw addresses."""
-import hashlib, ipaddress, json, pathlib, re, shutil, signal, subprocess, sys, threading, time
+import hashlib, ipaddress, json, os, pathlib, re, shutil, signal, subprocess, sys, threading, time
 
 # Sustained fresh-connection runs can exceed 1,000 observations on one runner.
 # Keep metadata bounded and continue counting omissions after reaching the cap.
@@ -22,6 +22,8 @@ def parse_reset(line, local, run):
 
 def capture(target, run):
     if not re.fullmatch(r'\d{1,20}-\d{1,3}',run):raise ValueError('Invalid run identity')
+    seconds=int(os.environ.get('GENERATOR_CAPTURE_SECONDS','660'))
+    if seconds not in (660,1850):raise ValueError('Invalid bounded capture duration')
     running=True
     def stop(*args):
         nonlocal running
@@ -32,7 +34,7 @@ def capture(target, run):
         for interface in json.loads(subprocess.check_output(['ip','-json','address','show'])):
             for address in interface.get('addr_info',[]):local.add(address['local'])
     with target.open('w') as output:
-        output.write(json.dumps({'kind':'capture_status','available':available,'max_records':MAX_RESET_RECORDS})+'\n');output.flush()
+        output.write(json.dumps({'kind':'capture_status','available':available,'max_records':MAX_RESET_RECORDS,'bounded_seconds':seconds})+'\n');output.flush()
         if not available:return
         process=subprocess.Popen(['tcpdump','-n','-l','-tt','-q','-s','96','-i','any','tcp port 443 and (tcp[tcpflags] & tcp-rst != 0)'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
         count=0
@@ -45,7 +47,7 @@ def capture(target, run):
                 if count<=MAX_RESET_RECORDS:output.write(json.dumps(record)+'\n');output.flush()
         thread=threading.Thread(target=read,daemon=True);thread.start()
         try:
-            deadline=time.monotonic()+660
+            deadline=time.monotonic()+seconds
             while running and process.poll() is None and time.monotonic()<deadline:time.sleep(.2)
         finally:
             if process.poll() is None:process.terminate()
