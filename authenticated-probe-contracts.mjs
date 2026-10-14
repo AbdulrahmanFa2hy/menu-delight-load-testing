@@ -3,6 +3,10 @@ import {sanitizeDiagnostic} from './contracts.mjs';
 export const authenticatedCases = ['tracking/cloudflare', 'tracking/origin', 'games/cloudflare', 'games/origin'];
 export const authenticatedVus = 25;
 export const authenticatedPacingMs = 6250;
+export function authenticatedSummaryMeta(data, expected) {
+  // The probe enables avg/P95/max. min is absent from this k6 summary format.
+  return {...expected, scenario_start_ms: data.metrics.probe_start?.values?.max ?? 0, network: data.setup_data};
+}
 export function authenticatedPlan(node, start, seconds) {
   if (!Number.isInteger(node) || node < 1 || node > 10 || !Number.isSafeInteger(start) || start <= 0 || ![60, 300].includes(seconds))
     throw new Error('Invalid authenticated schedule');

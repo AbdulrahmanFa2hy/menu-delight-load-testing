@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {authenticatedPlan, sanitizeAuthenticatedProbe, safeAuthenticatedSummary} from './authenticated-probe-contracts.mjs';
+import {authenticatedPlan, sanitizeAuthenticatedProbe, safeAuthenticatedSummary, authenticatedSummaryMeta} from './authenticated-probe-contracts.mjs';
+test('enabled k6 trend fields retain the actual start without an unavailable min', () => {
+  const data = {metrics:{probe_start:{values:{avg:10001,'p(95)':10001,max:10001}}},setup_data:{ip_fingerprint:'a'.repeat(64),colo:'ORD'}};
+  assert.equal(authenticatedSummaryMeta(data,{start_ms:10000}).scenario_start_ms,10001);
+});
 test('paired service routes swap on the same generators with bounded request budgets', () => {
   const odd = authenticatedPlan(1, 10000, 300), even = authenticatedPlan(2, 10000, 300);
   assert.deepEqual(odd.map(c => c.name), ['tracking/cloudflare', 'tracking/origin', 'games/cloudflare', 'games/origin']);

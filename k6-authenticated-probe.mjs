@@ -4,7 +4,7 @@ import crypto from 'k6/crypto';
 import execution from 'k6/execution';
 import {Counter, Rate, Trend} from 'k6/metrics';
 import {sessionAllowed, diagnosticBodyKind, diagnosticPeerClass, requestWindow} from './contracts.mjs';
-import {authenticatedCases, authenticatedVus, authenticatedPacingMs} from './authenticated-probe-contracts.mjs';
+import {authenticatedCases, authenticatedVus, authenticatedPacingMs, authenticatedSummaryMeta} from './authenticated-probe-contracts.mjs';
 
 const route = __ENV.PROBE_ROUTE, workload = __ENV.PROBE_WORKLOAD, connections = __ENV.PROBE_CONNECTIONS;
 const start = Number(__ENV.PROBE_START_MS), iterations = Number(__ENV.PROBE_ITERATIONS), node = Number(__ENV.NODE_INDEX);
@@ -88,8 +88,7 @@ export default function () {
   sleep(Math.max(0, authenticatedPacingMs - (Date.now() - begun)) / 1000);
 }
 export function handleSummary(data) {
-  data.meta = {run_id: run, node, workload, route, connections, iterations, start_ms: start,
-    scenario_start_ms: data.metrics.probe_start?.values?.max ?? 0, network: data.setup_data};
+  data.meta = authenticatedSummaryMeta(data, {run_id: run, node, workload, route, connections, iterations, start_ms: start});
   delete data.setup_data;
   return {[__ENV.PROBE_SUMMARY_PATH]: JSON.stringify(data)};
 }
