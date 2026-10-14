@@ -89,7 +89,7 @@ export default function () {
 }
 export function handleSummary(data) {
   data.meta = {run_id: run, node, workload, route, connections, iterations, start_ms: start,
-    scenario_start_ms: data.metrics.probe_start?.values?.min ?? 0, network: data.setup_data};
+    scenario_start_ms: data.metrics.probe_start?.values?.max ?? 0, network: data.setup_data};
   delete data.setup_data;
   return {[__ENV.PROBE_SUMMARY_PATH]: JSON.stringify(data)};
 }
