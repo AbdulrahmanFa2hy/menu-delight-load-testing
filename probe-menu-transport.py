@@ -17,7 +17,11 @@ MENU = '0e72058e-b4c9-4c43-98a8-315b8f94cc15'
 SURFACES = {
     'frontend': ('qr.gilgaamesh.com', '/menu/' + MENU, 200),
     'backend_denial': ('supabase.gilgaamesh.com', '/functions/v1/admin-create-owner', 401),
+    'xr_engine': ('qr.gilgaamesh.com', '/external/xr/v-c4781db3f6e5f3ec8285/xr.js', 200),
 }
+# Immutable deployed frontend asset; compare decoded bodies without exporting them.
+XR_BYTES = 1036695
+XR_SHA256 = 'b3973936862f4cb77ae32d24f253d8a0e8b1de4fa2a0cf688833742889ee829d'
 
 
 def fingerprint(run, address):
@@ -87,6 +91,7 @@ def main():
     parser.add_argument('--start-delay-seconds', type=int, choices=(0, 30), default=0)
     args = parser.parse_args()
     host, path, expected_status = SURFACES[args.surface]
+    request_seconds = 15 if args.surface == 'xr_engine' else 8
     anon_key = None
     if args.surface == 'backend_denial':
         anon_key = os.environ['ANON_KEY']
@@ -127,6 +132,9 @@ def main():
               'redirects_followed': False, 'public_menu_get_only': args.surface == 'frontend',
               'authorization_denial_only': args.surface == 'backend_denial',
               'http2_negotiation': True,
+              'request_deadline_ms': request_seconds * 1000,
+              'expected_body_bytes': XR_BYTES if args.surface == 'xr_engine' else None,
+              'expected_body_sha256': XR_SHA256 if args.surface == 'xr_engine' else None,
               'proxy_environment_present': any(os.getenv(k) for k in
                     ('HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy')),
               'libcurl_version': pycurl.version_info()[1],
@@ -143,7 +151,9 @@ def main():
             curl.setopt(pycurl.HTTP_VERSION, pycurl.CURL_HTTP_VERSION_2TLS)
             curl.setopt(pycurl.FOLLOWLOCATION, False)
             curl.setopt(pycurl.CONNECTTIMEOUT_MS, 3000)
-            curl.setopt(pycurl.TIMEOUT_MS, 8000)
+            curl.setopt(pycurl.TIMEOUT_MS, request_seconds * 1000)
+            if args.surface == 'xr_engine':
+                curl.setopt(pycurl.ACCEPT_ENCODING, '')  # Hash decoded gzip/br/identity alike.
             curl.setopt(pycurl.USERAGENT, 'menu-delight-transport-diagnostic/1')
             curl.setopt(pycurl.NOSIGNAL, 1)
             curl.setopt(pycurl.TCP_KEEPALIVE, 1)
@@ -157,7 +167,7 @@ def main():
             try:
                 count = 8 if connections == 'idle_reuse' else args.requests_per_case
                 for sequence in range(count):
-                    if time.monotonic() + 8 > deadline:
+                    if time.monotonic() + request_seconds > deadline:
                         raise RuntimeError('Diagnostic deadline reached')
                     record = {'kind': 'request', 'run_id': run, 'node': node,
                               'route': route, 'connections': connections,
@@ -165,9 +175,21 @@ def main():
                               'started_epoch_seconds': time.time(), 'socket': None,
                               'socket_attempts': [], 'connect_socket_attempts': []}
                     bytes_received = 0
+                    body_hash = hashlib.sha256()
+                    began = time.monotonic()
+                    previous_chunk = None
+                    first_chunk_ms = None
+                    maximum_body_gap_ms = 0
                     def discard(data):
-                        nonlocal bytes_received
+                        nonlocal bytes_received, previous_chunk, first_chunk_ms, maximum_body_gap_ms
+                        now = time.monotonic()
+                        if first_chunk_ms is None:
+                            first_chunk_ms = 1000 * (now - began)
+                        if previous_chunk is not None:
+                            maximum_body_gap_ms = max(maximum_body_gap_ms, 1000 * (now - previous_chunk))
+                        previous_chunk = now
                         bytes_received += len(data)
+                        body_hash.update(data)
                         return len(data) if bytes_received <= 2 * 1024 * 1024 else 0
                     def socket_ready(peer, local, peer_port, local_port):
                         record['socket'] = {
@@ -213,6 +235,13 @@ def main():
                                    'transport_kind': classify(code),
                                    'http_status': int(curl.getinfo(pycurl.RESPONSE_CODE)),
                                    'response_bytes': bytes_received,
+                                   'body_sha256': body_hash.hexdigest(),
+                                   'first_body_chunk_ms': first_chunk_ms,
+                                   'last_body_chunk_ms': 1000 * (previous_chunk - began) if previous_chunk is not None else None,
+                                   'tail_body_wait_ms': 1000 * (time.monotonic() - previous_chunk) if previous_chunk is not None else None,
+                                   'maximum_body_gap_ms': maximum_body_gap_ms,
+                                   'first_byte_ms': 1000 * curl.getinfo(pycurl.STARTTRANSFER_TIME),
+                                   'receive_ms': 1000 * (curl.getinfo(pycurl.TOTAL_TIME) - curl.getinfo(pycurl.STARTTRANSFER_TIME)),
                                    'new_connections': int(curl.getinfo(pycurl.NUM_CONNECTS)),
                                    'negotiated_http_version': int(curl.getinfo(pycurl.INFO_HTTP_VERSION)),
                                    'dns_ms': 1000 * curl.getinfo(pycurl.NAMELOOKUP_TIME),
@@ -235,6 +264,7 @@ def main():
                         time.sleep(6 if connections == 'idle_reuse' else .25)
             finally:
                 curl.close()
+        emit({'kind': 'generator_network_after', **{k: v for k, v in outgoing_address(run).items() if k != 'kind'}})
         emit({'kind': 'probe_final', **counts,
               'complete': counts['requests'] == 4 * args.requests_per_case + 16})
 

@@ -90,3 +90,23 @@ retries, change TLS checks, or change the main workload/latency gates. A success
 workflow means complete diagnostic evidence; retained transport errors still need
 investigation. Run the analyzer with `--profile client_versions` for this branch.
 No client upgrade or capacity claim follows from a clean bounded probe alone.
+
+# Full XR download comparison
+
+The diagnostic branch `codex/xr-download-diagnostics` accepts `xr_engine` with
+`curl_serial` in the manual generator-capacity workflow. Its ten generators each
+make 216 fixed-path GETs: 50 per Cloudflare/origin and fresh/keepalive case, plus
+eight per route with six-second idle gaps. Case order reverses on even runners.
+Both routes retain TLS certificate and hostname verification. No capability,
+administrative token, analytic write, redirect or application retry is used.
+
+Every decoded body must have 1,036,695 bytes and SHA-256
+`b3973936862f4cb77ae32d24f253d8a0e8b1de4fa2a0cf688833742889ee829d`,
+the immutable deployed XR asset. Only the digest, byte count, safe socket metadata
+and timings are exported. The request deadline remains the workload's 15 seconds;
+the whole probe is bounded to 300 seconds. The analyzer requires complete reset
+captures, stable distinct exits, every case and exercised connection modes. It
+retains integrity/HTTP/transport failures and per-node 1,000 ms p95 failures.
+Workflow success means complete evidence; `xr_criteria_passed` reports the result.
+This serial comparison cannot certify visitor capacity or rule out a fault that
+appears only during concurrent mixed load. Run `python3 -m unittest test_menu_transport.py`.

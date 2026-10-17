@@ -13,7 +13,7 @@ on:
         type: choice
         required: true
         default: frontend
-        options: [frontend, backend_denial, authenticated_backend]
+        options: [frontend, backend_denial, authenticated_backend, xr_engine]
       authenticated_seconds:
         description: Authenticated diagnostic only; bounded per-service observation window
         type: choice
@@ -133,7 +133,7 @@ jobs:
           retention-days: 7
 
   menu-transport:
-    if: github.repository == 'AbdulrahmanFa2hy/menu-delight-load-testing' && github.ref == 'refs/heads/codex/frontend-socket-diagnostics' && inputs.diagnostic_client != 'k6_concurrent'
+    if: github.repository == 'AbdulrahmanFa2hy/menu-delight-load-testing' && (github.ref == 'refs/heads/codex/frontend-socket-diagnostics' || (github.ref == 'refs/heads/codex/xr-download-diagnostics' && inputs.diagnostic_surface == 'xr_engine')) && inputs.diagnostic_client != 'k6_concurrent'
     name: Transport node ${{ matrix.node }}
     runs-on: ubuntu-24.04
     timeout-minutes: 8
@@ -192,7 +192,7 @@ jobs:
           retention-days: 7
   aggregate-transport:
     needs: menu-transport
-    if: always() && github.repository == 'AbdulrahmanFa2hy/menu-delight-load-testing' && github.ref == 'refs/heads/codex/frontend-socket-diagnostics' && inputs.diagnostic_client != 'k6_concurrent'
+    if: always() && github.repository == 'AbdulrahmanFa2hy/menu-delight-load-testing' && (github.ref == 'refs/heads/codex/frontend-socket-diagnostics' || (github.ref == 'refs/heads/codex/xr-download-diagnostics' && inputs.diagnostic_surface == 'xr_engine')) && inputs.diagnostic_client != 'k6_concurrent'
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
